@@ -1,0 +1,8 @@
+{
+  "name": "EXAM ANALYSIS",
+  "description": "CBSE examination result gazette analyzer with visual performance insights, grade distributions, interactive custom filter and pivot builder, student scorecards, and CSV exports.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
