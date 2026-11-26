@@ -7,9 +7,9 @@ import {
   Users,
   TrendingUp,
   Table,
-  BarChart2,
   ChevronRight,
   Filter,
+  Check,
 } from "lucide-react";
 import {
   ParsedGazette,
@@ -19,6 +19,7 @@ import {
   PivotColDimension,
   PivotMetric,
   STANDARD_GRADES,
+  CBSE_SUBJECT_CODES,
 } from "../types/exam";
 import { buildPivotMatrix } from "../utils/pivotEngine";
 import { exportFilteredStudentsCSV, exportPivotCSV } from "../utils/csvExporter";
@@ -29,11 +30,12 @@ interface CustomAnalysisWorkbenchProps {
   initialBand?: string;
   initialSubject?: string;
   initialGrade?: string;
+  initialStatuses?: string[];
 }
 
 const DEFAULT_FILTERS: CustomFilterState = {
   searchQuery: "",
-  result: "ALL",
+  results: [],
   gender: "ALL",
   performanceBand: "ALL",
   subjectCode: "ALL",
@@ -51,9 +53,11 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
   initialBand,
   initialSubject,
   initialGrade,
+  initialStatuses,
 }) => {
   const [filters, setFilters] = useState<CustomFilterState>({
     ...DEFAULT_FILTERS,
+    results: initialStatuses || [],
     performanceBand: initialBand || "ALL",
     subjectCode: initialSubject || "ALL",
     subjectGrade: initialGrade || "ALL",
@@ -76,8 +80,8 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
         if (!matchRoll && !matchName) return false;
       }
 
-      // Result status
-      if (filters.result !== "ALL" && cand.result !== filters.result) {
+      // Result status (multi-select; empty means ALL)
+      if (filters.results.length > 0 && !filters.results.includes(cand.result || "Unknown")) {
         return false;
       }
 
@@ -219,15 +223,41 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
         setColDimension("grade");
         setMetric("count");
         break;
-      case "non_pass":
-        setFilters({ ...DEFAULT_FILTERS, result: "R.L." });
+      case "non_pass": {
+        const nonPassStatuses = Object.keys(gazette.summary.resultBreakdown).filter(
+          (r) => r !== "PASS"
+        );
+        setFilters({ ...DEFAULT_FILTERS, results: nonPassStatuses });
         setRowDimension("result");
-        setColDimension("none");
+        setColDimension("gender");
         setMetric("count");
         break;
+      }
       default:
         setFilters(DEFAULT_FILTERS);
     }
+  };
+
+  const allResultStatuses = useMemo(
+    () =>
+      Object.keys(gazette.summary.resultBreakdown).sort((a, b) => {
+        if (a === "PASS") return -1;
+        if (b === "PASS") return 1;
+        return a.localeCompare(b);
+      }),
+    [gazette.summary.resultBreakdown]
+  );
+
+  const toggleResultStatus = (status: string) => {
+    setFilters((prev) => {
+      const next = prev.results.includes(status)
+        ? prev.results.filter((s) => s !== status)
+        : [...prev.results, status];
+      return {
+        ...prev,
+        results: next.length === allResultStatuses.length ? [] : next,
+      };
+    });
   };
 
   return (
@@ -279,7 +309,7 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
             onClick={() => applyPreset("non_pass")}
             className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 hover:text-slate-900 rounded-md transition-colors whitespace-nowrap"
           >
-            Result Later (R.L.) Audit
+            COMP / R.L. Non-Pass Audit
           </button>
           <button
             onClick={() => setFilters(DEFAULT_FILTERS)}
@@ -322,23 +352,51 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
             </div>
           </div>
 
-          {/* Result Status */}
-          <div>
+          {/* Multi-Select Result Status */}
+          <div className="sm:col-span-2 lg:col-span-4">
             <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-              Result Status
+              Student Result Status (select one or multiple)
             </label>
-            <select
-              value={filters.result}
-              onChange={(e) => setFilters({ ...filters, result: e.target.value })}
-              className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-md focus:bg-white focus:border-blue-600 outline-hidden font-mono"
-            >
-              <option value="ALL">All Results</option>
-              {Object.keys(gazette.summary.resultBreakdown).map((r) => (
-                <option key={r} value={r}>
-                  {r} ({gazette.summary.resultBreakdown[r]})
-                </option>
-              ))}
-            </select>
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => setFilters({ ...filters, results: [] })}
+                className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors ${
+                  filters.results.length === 0
+                    ? "bg-slate-900 text-white border-slate-900"
+                    : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                }`}
+              >
+                {filters.results.length === 0 && <Check className="w-3 h-3" />}
+                All ({gazette.summary.totalCandidates})
+              </button>
+              {allResultStatuses.map((r) => {
+                const isSelected = filters.results.includes(r);
+                return (
+                  <button
+                    key={r}
+                    type="button"
+                    onClick={() => toggleResultStatus(r)}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono font-medium rounded-md border transition-colors ${
+                      isSelected
+                        ? "bg-blue-50 text-blue-800 border-blue-400"
+                        : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                    }`}
+                  >
+                    <span
+                      className={`inline-flex items-center justify-center w-3.5 h-3.5 rounded-xs border ${
+                        isSelected
+                          ? "bg-blue-600 border-blue-600 text-white"
+                          : "border-slate-300 bg-white"
+                      }`}
+                    >
+                      {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                    </span>
+                    {r} ({gazette.summary.resultBreakdown[r]})
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {/* Gender */}
@@ -714,6 +772,11 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
                       <th className="py-2.5 px-3">Candidate Name</th>
                       <th className="py-2.5 px-3 text-center">Gender</th>
                       <th className="py-2.5 px-3 text-center">Result</th>
+                      {filters.subjectCode !== "ALL" && (
+                        <th className="py-2.5 px-3 text-center bg-blue-50 text-blue-900 whitespace-nowrap">
+                          {filters.subjectCode} ({CBSE_SUBJECT_CODES[filters.subjectCode] || "Sub"})
+                        </th>
+                      )}
                       <th className="py-2.5 px-3">Band</th>
                       <th className="py-2.5 px-3 text-right">Best-5 %</th>
                       <th className="py-2.5 px-3 text-right">Best-5 / 500</th>
@@ -723,54 +786,77 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {filteredCandidates.map((c) => (
-                      <tr
-                        key={c.rollNo}
-                        onClick={() => onSelectCandidate(c)}
-                        className="hover:bg-slate-50 cursor-pointer transition-colors group"
-                      >
-                        <td className="py-2.5 px-3 font-mono text-slate-600 font-medium">
-                          {c.rollNo}
-                        </td>
-                        <td className="py-2.5 px-3 font-semibold text-slate-900 group-hover:text-blue-700">
-                          {c.candidateName}
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-mono text-slate-600">
-                          {c.gender}
-                        </td>
-                        <td className="py-2.5 px-3 text-center">
-                          <span
-                            className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded ${
-                              c.result === "PASS"
-                                ? "text-emerald-700 bg-emerald-50"
-                                : "text-amber-700 bg-amber-50"
-                            }`}
-                          >
-                            {c.result}
-                          </span>
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-600 text-[11px]">
-                          {c.performanceBand}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900 tabular-nums">
-                          {c.best5Percentage !== null ? `${c.best5Percentage}%` : "—"}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono text-slate-600 tabular-nums">
-                          {c.best5Total !== null ? c.best5Total : "—"}
-                        </td>
-                        <td className="py-2.5 px-3 text-right font-mono text-slate-600 tabular-nums">
-                          {c.totalMarksAll !== null ? c.totalMarksAll : "—"}
-                        </td>
-                        <td className="py-2.5 px-3 text-center font-mono text-slate-500 text-[11px]">
-                          {`${c.internalGrade1} ${c.internalGrade2} ${c.internalGrade3}`.trim() || "—"}
-                        </td>
-                        <td className="py-2.5 px-3 text-right">
-                          <span className="inline-flex items-center text-blue-700 font-medium group-hover:translate-x-0.5 transition-transform">
-                            View <ChevronRight className="w-3.5 h-3.5 ml-0.5" />
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                    {filteredCandidates.map((c) => {
+                      const focusedSub =
+                        filters.subjectCode !== "ALL"
+                          ? c.subjects[filters.subjectCode]
+                          : undefined;
+                      return (
+                        <tr
+                          key={c.rollNo}
+                          onClick={() => onSelectCandidate(c)}
+                          className="hover:bg-slate-50 cursor-pointer transition-colors group"
+                        >
+                          <td className="py-2.5 px-3 font-mono text-slate-600 font-medium">
+                            {c.rollNo}
+                          </td>
+                          <td className="py-2.5 px-3 font-semibold text-slate-900 group-hover:text-blue-700">
+                            {c.candidateName}
+                          </td>
+                          <td className="py-2.5 px-3 text-center font-mono text-slate-600">
+                            {c.gender}
+                          </td>
+                          <td className="py-2.5 px-3 text-center">
+                            <span
+                              className={`font-mono text-[10px] font-bold px-2 py-0.5 rounded ${
+                                c.result === "PASS"
+                                  ? "text-emerald-700 bg-emerald-50"
+                                  : c.result === "COMP"
+                                    ? "text-rose-700 bg-rose-50"
+                                    : "text-amber-700 bg-amber-50"
+                              }`}
+                            >
+                              {c.result}
+                            </span>
+                          </td>
+                          {filters.subjectCode !== "ALL" && (
+                            <td className="py-2.5 px-3 text-center font-mono bg-blue-50/40 tabular-nums whitespace-nowrap">
+                              {focusedSub && focusedSub.marks !== null ? (
+                                <>
+                                  <span className="font-bold text-blue-900">{focusedSub.marks}</span>
+                                  <span className="text-[10px] text-slate-500 ml-1">
+                                    {focusedSub.grade}
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="text-slate-400">{focusedSub?.grade || "—"}</span>
+                              )}
+                            </td>
+                          )}
+                          <td className="py-2.5 px-3 text-slate-600 text-[11px]">
+                            {c.performanceBand}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900 tabular-nums">
+                            {c.best5Percentage !== null ? `${c.best5Percentage}%` : "—"}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono text-slate-600 tabular-nums">
+                            {c.best5Total !== null ? c.best5Total : "—"}
+                          </td>
+                          <td className="py-2.5 px-3 text-right font-mono text-slate-600 tabular-nums">
+                            {c.totalMarksAll !== null ? c.totalMarksAll : "—"}
+                          </td>
+                          <td className="py-2.5 px-3 text-center font-mono text-slate-500 text-[11px]">
+                            {`${c.internalGrade1} ${c.internalGrade2} ${c.internalGrade3}`.trim() ||
+                              "—"}
+                          </td>
+                          <td className="py-2.5 px-3 text-right">
+                            <span className="inline-flex items-center text-blue-700 font-medium group-hover:translate-x-0.5 transition-transform">
+                              View <ChevronRight className="w-3.5 h-3.5 ml-0.5" />
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

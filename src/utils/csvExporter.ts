@@ -124,6 +124,8 @@ export function exportSubjectAnalysisCSV(gazette: ParsedGazette): void {
     "Subject_Code",
     "Subject_Name",
     "Students_Appeared",
+    "Total_Marks_Sum",
+    "Quality_Index",
     "Mean_Marks",
     "Median_Marks",
     "Highest_Marks",
@@ -148,6 +150,8 @@ export function exportSubjectAnalysisCSV(gazette: ParsedGazette): void {
       s.subjectCode,
       s.subjectName,
       s.studentsAppeared,
+      s.totalMarksSum,
+      s.qualityIndex,
       s.meanMarks,
       s.medianMarks,
       s.highestMarks,
@@ -165,6 +169,55 @@ export function exportSubjectAnalysisCSV(gazette: ParsedGazette): void {
       s.gradeCounts["E"] || 0,
     ];
     lines.push(rowVals.map(escapeCsvValue).join(","));
+  }
+
+  downloadFile(lines.join("\r\n"), filename);
+}
+
+/**
+ * Exports Top 5 Students from Each Subject alongside Subject Quality Index.
+ */
+export function exportSubjectToppersCSV(gazette: ParsedGazette): void {
+  const baseName = gazette.fileName.replace(/\.[^/.]+$/, "");
+  const filename = `${baseName}_subject_top5_students.csv`;
+
+  const headers = [
+    "Subject_Code",
+    "Subject_Name",
+    "Students_Appeared",
+    "Total_Marks_Sum",
+    "Quality_Index",
+    "Subject_Rank",
+    "Roll_No",
+    "Candidate_Name",
+    "Gender",
+    "Marks",
+    "Grade",
+    "Overall_Result",
+    "Best5_Percentage",
+  ];
+
+  const lines: string[] = [headers.map(escapeCsvValue).join(",")];
+
+  for (const s of gazette.subjectStats) {
+    for (const topper of s.topStudents) {
+      const rowVals = [
+        s.subjectCode,
+        s.subjectName,
+        s.studentsAppeared,
+        s.totalMarksSum,
+        s.qualityIndex,
+        topper.rank,
+        topper.candidate.rollNo,
+        topper.candidate.candidateName,
+        topper.candidate.gender,
+        topper.marks,
+        topper.grade,
+        topper.candidate.result,
+        topper.candidate.best5Percentage ?? "",
+      ];
+      lines.push(rowVals.map(escapeCsvValue).join(","));
+    }
   }
 
   downloadFile(lines.join("\r\n"), filename);

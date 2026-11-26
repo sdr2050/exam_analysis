@@ -7,7 +7,11 @@ import React, { useState, useMemo } from "react";
 import { parseCbseGazette } from "./utils/gazetteParser";
 import { ParsedGazette, CandidateRecord } from "./types/exam";
 import { SAMPLE_GAZETTE_TEXT, SAMPLE_GAZETTE_FILENAME } from "./data/sampleGazette";
-import { exportCompleteResultCSV, exportSubjectAnalysisCSV } from "./utils/csvExporter";
+import {
+  exportCompleteResultCSV,
+  exportSubjectAnalysisCSV,
+  exportSubjectToppersCSV,
+} from "./utils/csvExporter";
 import { Navbar } from "./components/Navbar";
 import { HeaderMetadataBanner } from "./components/HeaderMetadataBanner";
 import { ExecutiveOverview } from "./components/ExecutiveOverview";
@@ -32,6 +36,9 @@ export default function App() {
   const [drillDownBand, setDrillDownBand] = useState<string | undefined>(undefined);
   const [drillDownSubject, setDrillDownSubject] = useState<string | undefined>(undefined);
   const [drillDownGrade, setDrillDownGrade] = useState<string | undefined>(undefined);
+  const [drillDownStatuses, setDrillDownStatuses] = useState<string[] | undefined>(undefined);
+  const [directorySubject, setDirectorySubject] = useState<string | undefined>(undefined);
+  const [directoryStatuses, setDirectoryStatuses] = useState<string[] | undefined>(undefined);
 
   // Toast feedback state
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -49,6 +56,9 @@ export default function App() {
     setDrillDownBand(undefined);
     setDrillDownSubject(undefined);
     setDrillDownGrade(undefined);
+    setDrillDownStatuses(undefined);
+    setDirectorySubject(undefined);
+    setDirectoryStatuses(undefined);
     showToast("Restored sample demo gazette");
   };
 
@@ -58,6 +68,9 @@ export default function App() {
     setDrillDownBand(undefined);
     setDrillDownSubject(undefined);
     setDrillDownGrade(undefined);
+    setDrillDownStatuses(undefined);
+    setDirectorySubject(undefined);
+    setDirectoryStatuses(undefined);
     showToast(`Loaded ${newGazette.fileName} (${newGazette.summary.totalCandidates} candidates)`);
   };
 
@@ -71,6 +84,11 @@ export default function App() {
     showToast(`Exported ${gazette.fileName.replace(/\.[^/.]+$/, "")}_subject_analysis.csv`);
   };
 
+  const handleExportSubjectToppers = () => {
+    exportSubjectToppersCSV(gazette);
+    showToast(`Exported ${gazette.fileName.replace(/\.[^/.]+$/, "")}_subject_top5_students.csv`);
+  };
+
   const handlePrint = () => {
     window.print();
   };
@@ -80,6 +98,7 @@ export default function App() {
     setDrillDownBand(bandLabel);
     setDrillDownSubject(undefined);
     setDrillDownGrade(undefined);
+    setDrillDownStatuses(undefined);
     setActiveTab("custom");
   };
 
@@ -87,14 +106,22 @@ export default function App() {
     setDrillDownGrade(grade);
     setDrillDownBand(undefined);
     setDrillDownSubject(undefined);
+    setDrillDownStatuses(undefined);
     setActiveTab("custom");
   };
 
-  const handleFilterBySubject = (subjectCode: string) => {
+  const handleFilterBySubject = (subjectCode: string, statuses?: string[]) => {
     setDrillDownSubject(subjectCode);
     setDrillDownBand(undefined);
     setDrillDownGrade(undefined);
+    setDrillDownStatuses(statuses);
     setActiveTab("custom");
+  };
+
+  const handleViewSubjectStudents = (subjectCode: string, statuses: string[]) => {
+    setDirectorySubject(subjectCode);
+    setDirectoryStatuses(statuses);
+    setActiveTab("students");
   };
 
   return (
@@ -128,6 +155,8 @@ export default function App() {
             onFilterByBand={handleFilterByBand}
             onFilterByGrade={handleFilterByGrade}
             onNavigateToSubjects={() => setActiveTab("subjects")}
+            onViewSubjectStudents={handleViewSubjectStudents}
+            onExportSubjectToppers={handleExportSubjectToppers}
           />
         )}
 
@@ -135,6 +164,7 @@ export default function App() {
           <SubjectBreakdown
             gazette={gazette}
             onFilterBySubject={handleFilterBySubject}
+            onViewSubjectStudents={handleViewSubjectStudents}
           />
         )}
 
@@ -145,6 +175,7 @@ export default function App() {
             initialBand={drillDownBand}
             initialSubject={drillDownSubject}
             initialGrade={drillDownGrade}
+            initialStatuses={drillDownStatuses}
           />
         )}
 
@@ -152,6 +183,8 @@ export default function App() {
           <StudentDirectory
             gazette={gazette}
             onSelectCandidate={setSelectedCandidate}
+            initialSubjectCode={directorySubject}
+            initialStatuses={directoryStatuses}
           />
         )}
       </main>

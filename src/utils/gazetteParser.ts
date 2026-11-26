@@ -4,6 +4,7 @@ import {
   CandidateRecord,
   SubjectScore,
   SubjectStat,
+  SubjectTopper,
   PerformanceBandCount,
   OverallSummary,
   ParsedGazette,
@@ -230,10 +231,11 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
     }
   }
 
-  // Build Subject Statistics
+  // Build Subject Statistics (including Quality Index & Top 5 Students per Subject)
   const subjectStats: SubjectStat[] = sortedSubjectCodes.map((code) => {
     const subName = CBSE_SUBJECT_CODES[code] || `Subject ${code}`;
     const scores: number[] = [];
+    const appearedEntries: { candidate: CandidateRecord; marks: number; grade: string }[] = [];
     const gradeCounts: Record<string, number> = {
       A1: 0, A2: 0, B1: 0, B2: 0, C1: 0, C2: 0, D1: 0, D2: 0, E: 0,
     };
@@ -244,6 +246,11 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
       const subScore = cand.subjects[code];
       if (subScore && subScore.marks !== null) {
         scores.push(subScore.marks);
+        appearedEntries.push({
+          candidate: cand,
+          marks: subScore.marks,
+          grade: subScore.grade,
+        });
         if (subScore.grade && STANDARD_GRADES.includes(subScore.grade as any)) {
           gradeCounts[subScore.grade] = (gradeCounts[subScore.grade] || 0) + 1;
         }
@@ -254,6 +261,8 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
     }
 
     const studentsAppeared = scores.length;
+    let totalMarksSum = 0;
+    let qualityIndex = 0;
     let meanMarks = 0;
     let medianMarks = 0;
     let highestMarks = 0;
@@ -261,8 +270,9 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
     let passPercentage = 0;
 
     if (studentsAppeared > 0) {
-      const sum = scores.reduce((a, b) => a + b, 0);
-      meanMarks = Number((sum / studentsAppeared).toFixed(2));
+      totalMarksSum = scores.reduce((a, b) => a + b, 0);
+      qualityIndex = Number((totalMarksSum / studentsAppeared).toFixed(2));
+      meanMarks = qualityIndex;
       const sorted = [...scores].sort((a, b) => a - b);
       const mid = Math.floor(sorted.length / 2);
       medianMarks =
@@ -278,10 +288,37 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
     const qualityPercentage =
       studentsAppeared > 0 ? Number(((qualityCount / studentsAppeared) * 100).toFixed(2)) : 0;
 
+    // Top 5 appeared students with numeric marks (deterministic tie-breaking)
+    const sortedEntries = [...appearedEntries].sort((a, b) => {
+      if (b.marks !== a.marks) return b.marks - a.marks;
+      const b5Diff = (b.candidate.best5Percentage ?? -1) - (a.candidate.best5Percentage ?? -1);
+      if (b5Diff !== 0) return b5Diff;
+      const totDiff = (b.candidate.totalMarksAll ?? -1) - (a.candidate.totalMarksAll ?? -1);
+      if (totDiff !== 0) return totDiff;
+      return a.candidate.rollNo.localeCompare(b.candidate.rollNo);
+    });
+
+    const topStudents: SubjectTopper[] = [];
+    for (let idx = 0; idx < Math.min(5, sortedEntries.length); idx++) {
+      const entry = sortedEntries[idx];
+      const rank =
+        idx > 0 && entry.marks === sortedEntries[idx - 1].marks
+          ? topStudents[idx - 1].rank
+          : idx + 1;
+      topStudents.push({
+        rank,
+        candidate: entry.candidate,
+        marks: entry.marks,
+        grade: entry.grade,
+      });
+    }
+
     return {
       subjectCode: code,
       subjectName: subName,
       studentsAppeared,
+      totalMarksSum,
+      qualityIndex,
       meanMarks,
       medianMarks,
       highestMarks,
@@ -291,6 +328,7 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
       gradeCounts,
       qualityCount,
       qualityPercentage,
+      topStudents,
     };
   }).filter((s) => s.studentsAppeared > 0);
 

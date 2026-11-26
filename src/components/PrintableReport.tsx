@@ -103,7 +103,8 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({ gazette }) => 
               <th className="p-1.5">Code</th>
               <th className="p-1.5">Subject Name</th>
               <th className="p-1.5 text-right">App.</th>
-              <th className="p-1.5 text-right">Mean</th>
+              <th className="p-1.5 text-right">Sum</th>
+              <th className="p-1.5 text-right">Quality Index</th>
               <th className="p-1.5 text-right">Med.</th>
               <th className="p-1.5 text-right">Max</th>
               <th className="p-1.5 text-right">Min</th>
@@ -120,7 +121,8 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({ gazette }) => 
                 <td className="p-1.5 font-bold">{s.subjectCode}</td>
                 <td className="p-1.5 font-sans font-medium">{s.subjectName}</td>
                 <td className="p-1.5 text-right">{s.studentsAppeared}</td>
-                <td className="p-1.5 text-right font-bold">{s.meanMarks}</td>
+                <td className="p-1.5 text-right">{s.totalMarksSum}</td>
+                <td className="p-1.5 text-right font-bold">{s.qualityIndex.toFixed(2)}</td>
                 <td className="p-1.5 text-right">{s.medianMarks}</td>
                 <td className="p-1.5 text-right">{s.highestMarks}</td>
                 <td className="p-1.5 text-right">{s.lowestMarks}</td>
@@ -138,9 +140,9 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({ gazette }) => 
       </div>
 
       {/* 4. Top Rankers Register */}
-      <div className="print-avoid-break">
+      <div className="mb-6 print-avoid-break">
         <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 border-b border-slate-300 pb-1 mb-2">
-          4. Top Merit Rankers (Top 5 Performers)
+          4. Top Merit Rankers (Top 5 Overall Performers)
         </h2>
         <table className="w-full text-xs border border-slate-300 font-mono text-left">
           <thead className="bg-slate-100 border-b border-slate-300">
@@ -170,6 +172,49 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({ gazette }) => 
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* 5. Top 5 Students by Subject */}
+      <div className="mb-6">
+        <h2 className="text-xs font-bold uppercase tracking-wider text-slate-900 border-b border-slate-300 pb-1 mb-3">
+          5. Top 5 Students by Subject &amp; Subject Quality Index
+        </h2>
+        <div className="grid grid-cols-2 gap-4">
+          {subjectStats.map((s) => (
+            <div key={s.subjectCode} className="border border-slate-300 print-avoid-break">
+              <div className="bg-slate-100 px-2.5 py-1.5 border-b border-slate-300 flex items-center justify-between text-[11px]">
+                <span className="font-bold">
+                  {s.subjectCode} — {s.subjectName}
+                </span>
+                <span className="font-mono font-semibold">
+                  QI: {s.qualityIndex.toFixed(2)} ({s.studentsAppeared})
+                </span>
+              </div>
+              <table className="w-full text-[10px] font-mono text-left">
+                <thead className="border-b border-slate-200 bg-slate-50">
+                  <tr>
+                    <th className="p-1.5 w-8">#</th>
+                    <th className="p-1.5">Roll No</th>
+                    <th className="p-1.5 font-sans">Candidate Name</th>
+                    <th className="p-1.5 text-right">Marks</th>
+                    <th className="p-1.5 text-center">Gr</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-200">
+                  {s.topStudents.map((t) => (
+                    <tr key={`${s.subjectCode}-${t.candidate.rollNo}`}>
+                      <td className="p-1.5 font-bold">#{t.rank}</td>
+                      <td className="p-1.5">{t.candidate.rollNo}</td>
+                      <td className="p-1.5 font-sans font-medium">{t.candidate.candidateName}</td>
+                      <td className="p-1.5 text-right font-bold">{t.marks}</td>
+                      <td className="p-1.5 text-center">{t.grade || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Signature Strip */}

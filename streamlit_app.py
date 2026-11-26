@@ -350,7 +350,7 @@ def parse_cbse_gazette_text(
 
 
 def build_subject_analysis(df: pd.DataFrame, sorted_codes: List[str]) -> pd.DataFrame:
-    """Build subject-wise analysis DataFrame matching the original Python schema."""
+    """Build subject-wise analysis DataFrame including Total_Marks_Sum and Quality_Index."""
     sub_stats = []
     for code in sorted_codes:
         sub_name = CBSE_SUBJECT_CODES.get(code, f"Subject_{code}")
@@ -361,13 +361,17 @@ def build_subject_analysis(df: pd.DataFrame, sorted_codes: List[str]) -> pd.Data
         if len(s) == 0:
             continue
 
+        total_sum = int(s.sum())
+        quality_index = round(total_sum / len(s), 2)
         pass_count = int((g != "E").sum())
         quality_count = int(g.isin(["A1", "A2"]).sum())
         row = {
             "Subject_Code": code,
             "Subject_Name": sub_name.replace("_", " "),
             "Students_Appeared": int(len(s)),
-            "Mean_Marks": round(float(s.mean()), 2),
+            "Total_Marks_Sum": total_sum,
+            "Quality_Index": quality_index,
+            "Mean_Marks": quality_index,
             "Median_Marks": round(float(s.median()), 1),
             "Highest_Marks": int(s.max()),
             "Lowest_Marks": int(s.min()),
@@ -382,6 +386,65 @@ def build_subject_analysis(df: pd.DataFrame, sorted_codes: List[str]) -> pd.Data
     return pd.DataFrame(sub_stats)
 
 
+def build_subject_toppers_df(
+    df: pd.DataFrame, sorted_codes: List[str], analysis_df: pd.DataFrame
+) -> pd.DataFrame:
+    """Build Top 5 students per subject across all appeared students with numeric marks."""
+    if df.empty or analysis_df.empty:
+        return pd.DataFrame()
+
+    stats_lookup = {
+        str(r["Subject_Code"]): r for _, r in analysis_df.iterrows()
+    }
+    rows = []
+    for code in sorted_codes:
+        if code not in stats_lookup:
+            continue
+        sub_meta = stats_lookup[code]
+        sub_name_raw = CBSE_SUBJECT_CODES.get(code, f"Subject_{code}")
+        col_m = f"{code}_{sub_name_raw}_Marks"
+        col_g = f"{code}_{sub_name_raw}_Grade"
+        sub_slice = df[df[col_m].notna()].copy()
+        if sub_slice.empty:
+            continue
+
+        sub_slice["_sort_m"] = sub_slice[col_m].astype(float)
+        sub_slice["_sort_b5"] = sub_slice["Best5_Percentage"].fillna(-1.0).astype(float)
+        sub_slice["_sort_tot"] = sub_slice["Total_Marks_All"].fillna(-1).astype(float)
+        sub_slice = sub_slice.sort_values(
+            by=["_sort_m", "_sort_b5", "_sort_tot", "Roll_No"],
+            ascending=[False, False, False, True],
+        ).head(5)
+
+        prev_mark: Optional[int] = None
+        prev_rank = 1
+        for pos, (_, r) in enumerate(sub_slice.iterrows(), start=1):
+            mk = int(r[col_m])
+            rank = prev_rank if (prev_mark is not None and mk == prev_mark) else pos
+            prev_mark = mk
+            prev_rank = rank
+            rows.append(
+                {
+                    "Subject_Code": code,
+                    "Subject_Name": str(sub_meta["Subject_Name"]),
+                    "Students_Appeared": int(sub_meta["Students_Appeared"]),
+                    "Total_Marks_Sum": int(sub_meta["Total_Marks_Sum"]),
+                    "Quality_Index": float(sub_meta["Quality_Index"]),
+                    "Subject_Rank": rank,
+                    "Roll_No": str(r["Roll_No"]),
+                    "Candidate_Name": str(r["Candidate_Name"]),
+                    "Gender": str(r["Gender"]),
+                    "Marks": mk,
+                    "Grade": str(r[col_g] or "—"),
+                    "Overall_Result": str(r["Result"]),
+                    "Best5_Percentage": (
+                        float(r["Best5_Percentage"]) if pd.notna(r["Best5_Percentage"]) else np.nan
+                    ),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def export_complete_csv_bytes(df: pd.DataFrame) -> bytes:
     """Return CSV bytes matching the exact column set of the original Python script."""
     drop_helper_cols = [c for c in ("Performance_Band", "Subject_Combo") if c in df.columns]
@@ -389,13 +452,21 @@ def export_complete_csv_bytes(df: pd.DataFrame) -> bytes:
 
 
 def export_subject_csv_bytes(analysis_df: pd.DataFrame) -> bytes:
-    """Return Subject Analysis CSV bytes matching the original Python script."""
+    """Return Subject Analysis CSV bytes including Total_Marks_Sum and Quality_Index."""
     drop_helper_cols = [c for c in ("Quality_A1_A2_Pct",) if c in analysis_df.columns]
     return analysis_df.drop(columns=drop_helper_cols).to_csv(index=False).encode("utf-8")
 
 
+def export_subject_toppers_csv_bytes(toppers_df: pd.DataFrame) -> bytes:
+    """Return Subject Top 5 Students CSV bytes."""
+    return toppers_df.to_csv(index=False).encode("utf-8")
+
+
 def generate_printable_html(
-    df: pd.DataFrame, analysis_df: pd.DataFrame, metadata: Dict[str, str]
+    df: pd.DataFrame,
+    analysis_df: pd.DataFrame,
+    toppers_df: pd.DataFrame,
+    metadata: Dict[str, str],
 ) -> str:
     """Generate a clean printable HTML academic report for browser Print -> Save as PDF."""
     total_candidates = len(df)
@@ -430,7 +501,8 @@ def generate_printable_html(
             f"<td><b>{html.escape(str(r['Subject_Code']))}</b></td>"
             f"<td>{html.escape(str(r['Subject_Name']))}</td>"
             f"<td class='num'>{int(r['Students_Appeared'])}</td>"
-            f"<td class='num'><b>{r['Mean_Marks']}</b></td>"
+            f"<td class='num'>{int(r['Total_Marks_Sum'])}</td>"
+            f"<td class='num'><b>{float(r['Quality_Index']):.2f}</b></td>"
             f"<td class='num'>{r['Median_Marks']}</td>"
             f"<td class='num'>{int(r['Highest_Marks'])}</td>"
             f"<td class='num'>{int(r['Lowest_Marks'])}</td>"
@@ -452,6 +524,37 @@ def generate_printable_html(
             f"</tr>"
         )
 
+    sub_toppers_cards_html = ""
+    if not toppers_df.empty:
+        for _, sub_row in analysis_df.iterrows():
+            s_code = str(sub_row["Subject_Code"])
+            s_slice = toppers_df[toppers_df["Subject_Code"] == s_code]
+            if s_slice.empty:
+                continue
+            tr_items = ""
+            for _, tr in s_slice.iterrows():
+                tr_items += (
+                    f"<tr>"
+                    f"<td><b>#{int(tr['Subject_Rank'])}</b></td>"
+                    f"<td>{html.escape(str(tr['Roll_No']))}</td>"
+                    f"<td>{html.escape(str(tr['Candidate_Name']))}</td>"
+                    f"<td class='num'><b>{int(tr['Marks'])}</b></td>"
+                    f"<td class='num'>{html.escape(str(tr['Grade']))}</td>"
+                    f"</tr>"
+                )
+            sub_toppers_cards_html += (
+                f"<div class='sub-card'>"
+                f"<div class='sub-card-hdr'>"
+                f"<span><b>{html.escape(s_code)} — {html.escape(str(sub_row['Subject_Name']))}</b></span>"
+                f"<span>QI: <b>{float(sub_row['Quality_Index']):.2f}</b> ({int(sub_row['Students_Appeared'])})</span>"
+                f"</div>"
+                f"<table class='sub-tbl'>"
+                f"<thead><tr><th>#</th><th>Roll No</th><th>Candidate Name</th><th class='num'>Marks</th><th class='num'>Gr</th></tr></thead>"
+                f"<tbody>{tr_items}</tbody>"
+                f"</table>"
+                f"</div>"
+            )
+
     grade_headers = "".join(f"<th class='num'>{g}</th>" for g in STANDARD_GRADES)
     return f"""<!doctype html>
 <html lang="en">
@@ -468,6 +571,11 @@ def generate_printable_html(
     th, td {{ border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }}
     th {{ background: #f1f5f9; font-weight: 700; }}
     .num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+    .sub-grid {{ display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 10px; }}
+    .sub-card {{ border: 1px solid #cbd5e1; break-inside: avoid; }}
+    .sub-card-hdr {{ display: flex; justify-content: space-between; background: #f1f5f9; padding: 6px 8px; font-size: 11px; border-bottom: 1px solid #cbd5e1; }}
+    .sub-tbl {{ margin-top: 0; font-size: 10px; }}
+    .sub-tbl th, .sub-tbl td {{ border: none; border-bottom: 1px solid #e2e8f0; padding: 4px 6px; }}
     @media print {{ body {{ margin: 10mm; }} }}
   </style>
 </head>
@@ -512,21 +620,24 @@ def generate_printable_html(
   <table>
     <thead>
       <tr>
-        <th>Code</th><th>Subject</th><th class="num">App.</th><th class="num">Mean</th>
-        <th class="num">Med.</th><th class="num">Max</th><th class="num">Min</th>
-        <th class="num">Pass %</th>{grade_headers}
+        <th>Code</th><th>Subject</th><th class="num">App.</th><th class="num">Sum</th>
+        <th class="num">Quality Index</th><th class="num">Med.</th><th class="num">Max</th>
+        <th class="num">Min</th><th class="num">Pass %</th>{grade_headers}
       </tr>
     </thead>
     <tbody>{sub_rows_html}</tbody>
   </table>
 
-  <h2>4. Top 5 Performers (Best-5 Rankers)</h2>
+  <h2>4. Top 5 Overall Performers (Best-5 Rankers)</h2>
   <table>
     <thead>
       <tr><th>Rank</th><th>Roll No</th><th>Candidate Name</th><th class="num">Best-5</th><th class="num">Best-5 %</th><th class="num">All Marks</th></tr>
     </thead>
     <tbody>{top_rows_html}</tbody>
   </table>
+
+  <h2>5. Top 5 Students by Subject &amp; Subject Quality Index</h2>
+  <div class="sub-grid">{sub_toppers_cards_html}</div>
 </body>
 </html>"""
 
@@ -570,6 +681,8 @@ with st.sidebar:
         )
         st.stop()
 
+    subject_toppers_df = build_subject_toppers_df(df, sorted_codes, analysis_df)
+
     st.divider()
     st.markdown("#### Active File")
     st.code(active_filename, language=None)
@@ -595,8 +708,15 @@ with st.sidebar:
         use_container_width=True,
     )
     st.download_button(
+        label="Download Subject Top 5 CSV",
+        data=export_subject_toppers_csv_bytes(subject_toppers_df),
+        file_name=f"{base_stem}_subject_top5_students.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
+    st.download_button(
         label="Download Printable Report (HTML/PDF)",
-        data=generate_printable_html(df, analysis_df, metadata).encode("utf-8"),
+        data=generate_printable_html(df, analysis_df, subject_toppers_df, metadata).encode("utf-8"),
         file_name=f"{base_stem}_academic_report.html",
         mime="text/html",
         use_container_width=True,
@@ -753,6 +873,124 @@ with tab_overview:
         fig_grade.update_traces(textposition="outside", cliponaxis=False)
         st.plotly_chart(fig_grade, use_container_width=True)
 
+    # Subject Quality Index (Sum of Marks / Appeared Students)
+    st.subheader("Subject Quality Index (Sum of Marks ÷ Appeared Students)")
+    if analysis_df.empty:
+        st.info("No numeric subject marks available to compute Subject Quality Index.")
+    else:
+        total_paper_sum = int(analysis_df["Total_Marks_Sum"].sum())
+        total_paper_app = int(analysis_df["Students_Appeared"].sum())
+        composite_qi = round(total_paper_sum / total_paper_app, 2) if total_paper_app else 0.0
+        st.caption(
+            f"All appeared students with numeric marks · Composite Quality Index: **{composite_qi:.2f}** "
+            f"({total_paper_sum:,} ÷ {total_paper_app:,})"
+        )
+        qi_left, qi_right = st.columns([1.2, 1])
+        qi_table = analysis_df[
+            [
+                "Subject_Code",
+                "Subject_Name",
+                "Total_Marks_Sum",
+                "Students_Appeared",
+                "Quality_Index",
+                "Highest_Marks",
+                "Pass_Percentage",
+            ]
+        ].sort_values("Quality_Index", ascending=False)
+        with qi_left:
+            st.dataframe(qi_table, use_container_width=True, hide_index=True)
+        with qi_right:
+            qi_plot_df = qi_table.sort_values("Quality_Index", ascending=True).copy()
+            qi_plot_df["Label"] = qi_plot_df["Subject_Code"] + " — " + qi_plot_df["Subject_Name"]
+            qi_plot_df["Tier"] = np.where(
+                qi_plot_df["Quality_Index"] >= composite_qi,
+                "At / Above Composite QI",
+                "Below Composite QI",
+            )
+            fig_qi = px.bar(
+                qi_plot_df,
+                x="Quality_Index",
+                y="Label",
+                orientation="h",
+                color="Tier",
+                color_discrete_map={
+                    "At / Above Composite QI": "#059669",
+                    "Below Composite QI": "#2563EB",
+                },
+                text="Quality_Index",
+                hover_data=["Total_Marks_Sum", "Students_Appeared", "Highest_Marks"],
+            )
+            fig_qi.add_vline(
+                x=composite_qi,
+                line_dash="dash",
+                line_color="#1E3A8A",
+                annotation_text=f"Composite ({composite_qi:.2f})",
+                annotation_position="top right",
+            )
+            fig_qi.update_layout(
+                height=max(300, len(qi_plot_df) * 38),
+                margin=dict(l=10, r=25, t=25, b=10),
+                plot_bgcolor="#FFFFFF",
+                paper_bgcolor="#FFFFFF",
+                xaxis=dict(range=[0, 105], title="Quality Index"),
+                yaxis_title=None,
+                legend_title=None,
+            )
+            fig_qi.update_traces(textposition="outside")
+            st.plotly_chart(fig_qi, use_container_width=True)
+
+    # Top 5 Students from Each Subject (Card Grid)
+    top_hdr_col, top_sort_col, top_dl_col = st.columns([2.2, 1, 1])
+    top_hdr_col.subheader("Top 5 Students by Subject")
+    topper_order = top_sort_col.radio(
+        "Card Order",
+        ["Subject Order", "Highest QI"],
+        horizontal=True,
+        label_visibility="collapsed",
+        key="tab1_topper_card_order",
+    )
+    top_dl_col.download_button(
+        "Download Top 5 CSV",
+        data=export_subject_toppers_csv_bytes(subject_toppers_df),
+        file_name=f"{base_stem}_subject_top5_students.csv",
+        mime="text/csv",
+        use_container_width=True,
+        key="tab1_top5_csv_btn",
+    )
+
+    if subject_toppers_df.empty:
+        st.info("No subject topper records available.")
+    else:
+        ordered_subjects_df = (
+            analysis_df.sort_values("Quality_Index", ascending=False)
+            if topper_order == "Highest QI"
+            else analysis_df
+        )
+        grid_cols = st.columns(2)
+        for card_idx, (_, sub_r) in enumerate(ordered_subjects_df.iterrows()):
+            s_code = str(sub_r["Subject_Code"])
+            s_slice = subject_toppers_df[subject_toppers_df["Subject_Code"] == s_code]
+            if s_slice.empty:
+                continue
+            with grid_cols[card_idx % 2]:
+                with st.container(border=True):
+                    st.markdown(f"**{sub_r['Subject_Name']}**")
+                    st.caption(
+                        f"{s_code} · {int(sub_r['Students_Appeared'])} appeared · "
+                        f"Sum {int(sub_r['Total_Marks_Sum']):,} · QI {float(sub_r['Quality_Index']):.2f}"
+                    )
+                    card_tbl = s_slice[
+                        ["Subject_Rank", "Roll_No", "Candidate_Name", "Marks", "Grade", "Overall_Result"]
+                    ].rename(
+                        columns={
+                            "Subject_Rank": "Rank",
+                            "Roll_No": "Roll No",
+                            "Candidate_Name": "Candidate",
+                            "Overall_Result": "Status",
+                        }
+                    )
+                    st.dataframe(card_tbl, use_container_width=True, hide_index=True)
+
     # Automated Academic Audit & Observations
     st.subheader("Automated Academic Audit & Observations")
     insights = [
@@ -839,81 +1077,120 @@ with tab_overview:
 # ===========================================================================
 with tab_subjects:
     st.subheader("Curriculum & Subject Performance Breakdown")
-    chart_mode = st.radio(
+
+    all_statuses_tab2 = sorted(
+        df["Result"].dropna().unique().tolist(),
+        key=lambda x: (0 if x == "PASS" else 1, x),
+    )
+    sb_col1, sb_col2 = st.columns([2, 1])
+    selected_statuses_tab2 = sb_col1.multiselect(
+        "Filter by Student Result Status (select one or multiple)",
+        options=all_statuses_tab2,
+        default=all_statuses_tab2,
+        key="tab2_status_multiselect",
+        help="Select one or more student result statuses to recalculate subject-wise performance.",
+    )
+    chart_mode = sb_col2.radio(
         "Visualization Mode",
         ["Mean Marks vs School Benchmark", "100% Stacked Grade Distribution (A1–E)"],
-        horizontal=True,
-        label_visibility="collapsed",
+        horizontal=False,
     )
 
-    if chart_mode == "Mean Marks vs School Benchmark":
-        sub_plot_df = analysis_df.sort_values("Mean_Marks", ascending=True).copy()
-        sub_plot_df["Label"] = sub_plot_df["Subject_Code"] + " — " + sub_plot_df["Subject_Name"]
-        sub_plot_df["Status"] = np.where(
-            sub_plot_df["Mean_Marks"] >= mean_b5, "Above School Mean", "Below School Mean"
-        )
-        fig_sub = px.bar(
-            sub_plot_df,
-            x="Mean_Marks",
-            y="Label",
-            orientation="h",
-            color="Status",
-            color_discrete_map={
-                "Above School Mean": "#059669",
-                "Below School Mean": "#2563EB",
-            },
-            text="Mean_Marks",
-            hover_data=["Students_Appeared", "Median_Marks", "Highest_Marks", "Lowest_Marks", "Pass_Percentage"],
-        )
-        fig_sub.add_vline(
-            x=mean_b5,
-            line_dash="dash",
-            line_color="#1E3A8A",
-            annotation_text=f"School Mean ({mean_b5}%)",
-            annotation_position="top right",
-        )
-        fig_sub.update_layout(
-            height=max(340, len(sub_plot_df) * 44),
-            margin=dict(l=10, r=30, t=30, b=10),
-            plot_bgcolor="#FFFFFF",
-            paper_bgcolor="#FFFFFF",
-            xaxis=dict(range=[0, 105], title="Mean Marks (/100)"),
-            yaxis_title=None,
-            legend_title=None,
-        )
-        fig_sub.update_traces(textposition="outside")
-        st.plotly_chart(fig_sub, use_container_width=True)
+    if selected_statuses_tab2:
+        tab2_df = df[df["Result"].isin(selected_statuses_tab2)]
     else:
-        fig_stack = go.Figure()
-        labels = analysis_df["Subject_Code"] + " — " + analysis_df["Subject_Name"]
-        for gr in STANDARD_GRADES:
-            counts = analysis_df[f"Grade_{gr}"]
-            pcts = (counts / analysis_df["Students_Appeared"] * 100).round(1)
-            fig_stack.add_trace(
-                go.Bar(
-                    name=gr,
-                    y=labels,
-                    x=pcts,
-                    orientation="h",
-                    marker_color=GRADE_COLORS[gr],
-                    customdata=counts,
-                    hovertemplate=f"<b>%{{y}}</b><br>Grade {gr}: %{{customdata}} students (%{{x}}%)<extra></extra>",
-                )
-            )
-        fig_stack.update_layout(
-            barmode="stack",
-            height=max(360, len(analysis_df) * 44),
-            margin=dict(l=10, r=20, t=20, b=10),
-            plot_bgcolor="#FFFFFF",
-            paper_bgcolor="#FFFFFF",
-            xaxis=dict(range=[0, 100], title="Grade Distribution (%)"),
-            yaxis_title=None,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        )
-        st.plotly_chart(fig_stack, use_container_width=True)
+        tab2_df = df.iloc[0:0]
 
-    st.subheader("Subject Statistical Summary Table")
-    st.dataframe(analysis_df, use_container_width=True, hide_index=True)
+    tab2_analysis_df = (
+        analysis_df
+        if set(selected_statuses_tab2) == set(all_statuses_tab2)
+        else build_subject_analysis(tab2_df, sorted_codes)
+    )
+    tab2_b5 = tab2_df["Best5_Percentage"].dropna()
+    tab2_mean_b5 = round(float(tab2_b5.mean()), 2) if len(tab2_b5) else 0.0
+
+    if tab2_analysis_df.empty:
+        st.info(
+            "No numeric subject marks are available for the selected student status filter "
+            "(for example, R.L. candidates have pending scores or no status is selected)."
+        )
+    else:
+        if chart_mode == "Mean Marks vs School Benchmark":
+            sub_plot_df = tab2_analysis_df.sort_values("Mean_Marks", ascending=True).copy()
+            sub_plot_df["Label"] = sub_plot_df["Subject_Code"] + " — " + sub_plot_df["Subject_Name"]
+            sub_plot_df["Status"] = np.where(
+                sub_plot_df["Mean_Marks"] >= tab2_mean_b5,
+                "Above Cohort Mean",
+                "Below Cohort Mean",
+            )
+            fig_sub = px.bar(
+                sub_plot_df,
+                x="Mean_Marks",
+                y="Label",
+                orientation="h",
+                color="Status",
+                color_discrete_map={
+                    "Above Cohort Mean": "#059669",
+                    "Below Cohort Mean": "#2563EB",
+                },
+                text="Mean_Marks",
+                hover_data=[
+                    "Students_Appeared",
+                    "Median_Marks",
+                    "Highest_Marks",
+                    "Lowest_Marks",
+                    "Pass_Percentage",
+                ],
+            )
+            fig_sub.add_vline(
+                x=tab2_mean_b5,
+                line_dash="dash",
+                line_color="#1E3A8A",
+                annotation_text=f"Cohort Mean ({tab2_mean_b5}%)",
+                annotation_position="top right",
+            )
+            fig_sub.update_layout(
+                height=max(340, len(sub_plot_df) * 44),
+                margin=dict(l=10, r=30, t=30, b=10),
+                plot_bgcolor="#FFFFFF",
+                paper_bgcolor="#FFFFFF",
+                xaxis=dict(range=[0, 105], title="Mean Marks (/100)"),
+                yaxis_title=None,
+                legend_title=None,
+            )
+            fig_sub.update_traces(textposition="outside")
+            st.plotly_chart(fig_sub, use_container_width=True)
+        else:
+            fig_stack = go.Figure()
+            labels = tab2_analysis_df["Subject_Code"] + " — " + tab2_analysis_df["Subject_Name"]
+            for gr in STANDARD_GRADES:
+                counts = tab2_analysis_df[f"Grade_{gr}"]
+                pcts = (counts / tab2_analysis_df["Students_Appeared"] * 100).round(1)
+                fig_stack.add_trace(
+                    go.Bar(
+                        name=gr,
+                        y=labels,
+                        x=pcts,
+                        orientation="h",
+                        marker_color=GRADE_COLORS[gr],
+                        customdata=counts,
+                        hovertemplate=f"<b>%{{y}}</b><br>Grade {gr}: %{{customdata}} students (%{{x}}%)<extra></extra>",
+                    )
+                )
+            fig_stack.update_layout(
+                barmode="stack",
+                height=max(360, len(tab2_analysis_df) * 44),
+                margin=dict(l=10, r=20, t=20, b=10),
+                plot_bgcolor="#FFFFFF",
+                paper_bgcolor="#FFFFFF",
+                xaxis=dict(range=[0, 100], title="Grade Distribution (%)"),
+                yaxis_title=None,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            )
+            st.plotly_chart(fig_stack, use_container_width=True)
+
+        st.subheader("Subject Statistical Summary Table")
+        st.dataframe(tab2_analysis_df, use_container_width=True, hide_index=True)
 
 
 # ===========================================================================
@@ -926,53 +1203,78 @@ with tab_custom:
         "and a live Row × Column cross-tabulation builder."
     )
 
+    all_result_statuses = sorted(
+        df["Result"].dropna().unique().tolist(),
+        key=lambda x: (0 if x == "PASS" else 1, x),
+    )
+    non_pass_statuses = [r for r in all_result_statuses if r != "PASS"]
+
     # Preset buttons via session state
-    if "preset_result" not in st.session_state:
-        st.session_state.preset_result = "ALL"
+    if "preset_statuses" not in st.session_state:
+        st.session_state.preset_statuses = list(all_result_statuses)
         st.session_state.preset_min_b5 = 0.0
         st.session_state.preset_max_b5 = 100.0
         st.session_state.preset_row = "Subject"
         st.session_state.preset_col = "Grade (A1–E)"
         st.session_state.preset_metric = "Candidate Count (N)"
+    else:
+        valid_saved = [s for s in st.session_state.preset_statuses if s in all_result_statuses]
+        if not valid_saved and all_result_statuses:
+            st.session_state.preset_statuses = list(all_result_statuses)
+        else:
+            st.session_state.preset_statuses = valid_saved
+
+    if "custom_status_multiselect" not in st.session_state:
+        st.session_state["custom_status_multiselect"] = list(st.session_state.preset_statuses)
+    else:
+        st.session_state["custom_status_multiselect"] = [
+            s for s in st.session_state["custom_status_multiselect"] if s in all_result_statuses
+        ]
 
     p1, p2, p3, p4, p5, p6 = st.columns(6)
     if p1.button("Distinction (≥75%)", use_container_width=True):
-        st.session_state.preset_result = "PASS"
+        st.session_state.preset_statuses = ["PASS"] if "PASS" in all_result_statuses else list(all_result_statuses)
+        st.session_state["custom_status_multiselect"] = list(st.session_state.preset_statuses)
         st.session_state.preset_min_b5 = 75.0
         st.session_state.preset_max_b5 = 100.0
         st.session_state.preset_row = "Performance Band"
         st.session_state.preset_col = "Gender"
         st.session_state.preset_metric = "Candidate Count (N)"
     if p2.button("Borderline (<55%)", use_container_width=True):
-        st.session_state.preset_result = "ALL"
+        st.session_state.preset_statuses = list(all_result_statuses)
+        st.session_state["custom_status_multiselect"] = list(all_result_statuses)
         st.session_state.preset_min_b5 = 0.0
         st.session_state.preset_max_b5 = 55.0
         st.session_state.preset_row = "Subject"
         st.session_state.preset_col = "Grade (A1–E)"
         st.session_state.preset_metric = "Candidate Count (N)"
     if p3.button("Subject × Grade", use_container_width=True):
-        st.session_state.preset_result = "ALL"
+        st.session_state.preset_statuses = list(all_result_statuses)
+        st.session_state["custom_status_multiselect"] = list(all_result_statuses)
         st.session_state.preset_min_b5 = 0.0
         st.session_state.preset_max_b5 = 100.0
         st.session_state.preset_row = "Subject"
         st.session_state.preset_col = "Grade (A1–E)"
         st.session_state.preset_metric = "Candidate Count (N)"
     if p4.button("Gender × Band", use_container_width=True):
-        st.session_state.preset_result = "ALL"
+        st.session_state.preset_statuses = list(all_result_statuses)
+        st.session_state["custom_status_multiselect"] = list(all_result_statuses)
         st.session_state.preset_min_b5 = 0.0
         st.session_state.preset_max_b5 = 100.0
         st.session_state.preset_row = "Gender"
         st.session_state.preset_col = "Performance Band"
         st.session_state.preset_metric = "Candidate Count (N)"
     if p5.button("COMP / R.L. Audit", use_container_width=True):
-        st.session_state.preset_result = "NON_PASS"
+        st.session_state.preset_statuses = non_pass_statuses or list(all_result_statuses)
+        st.session_state["custom_status_multiselect"] = list(st.session_state.preset_statuses)
         st.session_state.preset_min_b5 = 0.0
         st.session_state.preset_max_b5 = 100.0
         st.session_state.preset_row = "Result Status"
         st.session_state.preset_col = "Gender"
         st.session_state.preset_metric = "Candidate Count (N)"
     if p6.button("Reset Filters", use_container_width=True):
-        st.session_state.preset_result = "ALL"
+        st.session_state.preset_statuses = list(all_result_statuses)
+        st.session_state["custom_status_multiselect"] = list(all_result_statuses)
         st.session_state.preset_min_b5 = 0.0
         st.session_state.preset_max_b5 = 100.0
         st.session_state.preset_row = "Subject"
@@ -981,16 +1283,14 @@ with tab_custom:
 
     # Filter Controls
     with st.expander("Cohort Filter Controls", expanded=True):
-        fc1, fc2, fc3, fc4 = st.columns(4)
+        fc1, fc2, fc3, fc4 = st.columns([1.1, 1.5, 0.7, 1.1])
         q_search = fc1.text_input("Search Name or Roll No", placeholder="e.g. 90000001 or AAA")
-
-        result_options = ["ALL", "NON_PASS"] + sorted(df["Result"].dropna().unique().tolist())
-        default_res_idx = (
-            result_options.index(st.session_state.preset_result)
-            if st.session_state.preset_result in result_options
-            else 0
+        f_statuses = fc2.multiselect(
+            "Student Result Status (one or multiple)",
+            options=all_result_statuses,
+            key="custom_status_multiselect",
+            help="Select one or more statuses (e.g. PASS, COMP, R.L.).",
         )
-        f_result = fc2.selectbox("Result Status", result_options, index=default_res_idx)
         f_gender = fc3.selectbox("Gender", ["ALL", "M", "F"])
         f_band = fc4.selectbox("Performance Band", ["ALL"] + BAND_ORDER + ["Pending / R.L."])
 
@@ -1016,10 +1316,10 @@ with tab_custom:
             df["Roll_No"].astype(str).str.lower().str.contains(q, na=False)
             | df["Candidate_Name"].astype(str).str.lower().str.contains(q, na=False)
         )
-    if f_result == "NON_PASS":
-        mask &= df["Result"] != "PASS"
-    elif f_result != "ALL":
-        mask &= df["Result"] == f_result
+    if f_statuses:
+        mask &= df["Result"].isin(f_statuses)
+    else:
+        mask &= False
 
     if f_gender != "ALL":
         mask &= df["Gender"] == f_gender
@@ -1372,8 +1672,41 @@ with tab_students:
             st.info("No numeric marks recorded for this candidate (e.g., Result Later).")
 
     st.divider()
-    st.subheader("Complete Student Register")
-    reg_search = st.text_input("Filter Register by Name or Roll No", key="reg_search")
+    st.subheader("Complete Student Register & Subject-Wise Result Filter")
+
+    reg_all_statuses = sorted(
+        df["Result"].dropna().unique().tolist(),
+        key=lambda x: (0 if x == "PASS" else 1, x),
+    )
+    reg_sub_options = ["All Subjects (Full Register)"] + [
+        f"{c} — {subject_display_name(c)}" for c in sorted_codes
+    ]
+
+    rf1, rf2, rf3, rf4 = st.columns([1.2, 1.4, 1.3, 1.1])
+    reg_search = rf1.text_input(
+        "Search Name or Roll No",
+        placeholder="e.g. 90000001 or AAA",
+        key="reg_search",
+    )
+    reg_statuses = rf2.multiselect(
+        "Student Status (one or multiple)",
+        options=reg_all_statuses,
+        default=reg_all_statuses,
+        key="reg_status_multiselect",
+    )
+    reg_sub_label = rf3.selectbox(
+        "Subject-Wise Result Filter",
+        options=reg_sub_options,
+        key="reg_subject_filter",
+    )
+    reg_grades = rf4.multiselect(
+        "Grade Filter (optional)",
+        options=STANDARD_GRADES + ["AB", "R.L."],
+        default=[],
+        key="reg_grade_multiselect",
+        help="Filter by grade in the selected subject (or across any subject when All Subjects is active).",
+    )
+
     reg_df = df.copy()
     if reg_search.strip():
         q = reg_search.strip().lower()
@@ -1382,15 +1715,106 @@ with tab_students:
             | reg_df["Candidate_Name"].astype(str).str.lower().str.contains(q, na=False)
         ]
 
-    display_cols = [
-        "Rank_Best5",
-        "Roll_No",
-        "Candidate_Name",
-        "Gender",
-        "Result",
-        "Best5_Percentage",
-        "Best5_Total_500",
-        "Total_Marks_All",
-        "Performance_Band",
-    ] + [f"{c}_{CBSE_SUBJECT_CODES.get(c, f'Subject_{c}')}_Marks" for c in sorted_codes]
-    st.dataframe(reg_df[display_cols], use_container_width=True, hide_index=True)
+    if reg_statuses:
+        reg_df = reg_df[reg_df["Result"].isin(reg_statuses)]
+    else:
+        reg_df = reg_df.iloc[0:0]
+
+    reg_sub_code = (
+        reg_sub_label.split(" — ")[0]
+        if reg_sub_label != "All Subjects (Full Register)"
+        else "ALL"
+    )
+
+    if reg_sub_code != "ALL":
+        sub_prefix = f"{reg_sub_code}_{CBSE_SUBJECT_CODES.get(reg_sub_code, f'Subject_{reg_sub_code}')}"
+        m_col = f"{sub_prefix}_Marks"
+        g_col = f"{sub_prefix}_Grade"
+        reg_df = reg_df[reg_df[m_col].notna() | (reg_df[g_col] != "")]
+        if reg_grades:
+            reg_df = reg_df[reg_df[g_col].isin(reg_grades)]
+
+        # Subject-wise summary KPIs for filtered students
+        scored_marks = reg_df[m_col].dropna().astype(float)
+        scored_grades = reg_df.loc[scored_marks.index, g_col]
+        sm1, sm2, sm3, sm4, sm5 = st.columns(5)
+        sm1.metric("Enrolled (Filtered)", f"{len(reg_df)}")
+        sm2.metric(
+            "Subject Mean",
+            f"{round(float(scored_marks.mean()), 2)}" if len(scored_marks) else "—",
+        )
+        sm3.metric(
+            "Subject Median",
+            f"{round(float(scored_marks.median()), 1)}" if len(scored_marks) else "—",
+        )
+        sm4.metric(
+            "Highest / Lowest",
+            f"{int(scored_marks.max())} / {int(scored_marks.min())}"
+            if len(scored_marks)
+            else "—",
+        )
+        sub_pass_pct = (
+            round(float((scored_grades != "E").mean()) * 100, 1)
+            if len(scored_marks)
+            else None
+        )
+        sm5.metric(
+            "Subject Pass %",
+            f"{sub_pass_pct}%" if sub_pass_pct is not None else "—",
+        )
+
+        reg_df = reg_df.sort_values(
+            by=[m_col, "Best5_Percentage"],
+            ascending=[False, False],
+            na_position="last",
+        )
+        other_mark_cols = [
+            f"{c}_{CBSE_SUBJECT_CODES.get(c, f'Subject_{c}')}_Marks"
+            for c in sorted_codes
+            if c != reg_sub_code
+        ]
+        display_cols = [
+            "Rank_Best5",
+            "Roll_No",
+            "Candidate_Name",
+            "Gender",
+            "Result",
+            m_col,
+            g_col,
+            "Best5_Percentage",
+            "Best5_Total_500",
+            "Total_Marks_All",
+            "Performance_Band",
+        ] + other_mark_cols
+    else:
+        if reg_grades:
+            grade_cols = [c for c in reg_df.columns if c.endswith("_Grade")]
+            reg_df = reg_df[reg_df[grade_cols].isin(reg_grades).any(axis=1)]
+        display_cols = [
+            "Rank_Best5",
+            "Roll_No",
+            "Candidate_Name",
+            "Gender",
+            "Result",
+            "Best5_Percentage",
+            "Best5_Total_500",
+            "Total_Marks_All",
+            "Performance_Band",
+        ] + [f"{c}_{CBSE_SUBJECT_CODES.get(c, f'Subject_{c}')}_Marks" for c in sorted_codes]
+
+    st.caption(f"Showing **{len(reg_df)}** of **{len(df)}** candidates.")
+    if reg_df.empty:
+        st.info("No students match the selected subject, grade, and status filters.")
+    else:
+        st.dataframe(reg_df[display_cols], use_container_width=True, hide_index=True)
+        dl_name = (
+            f"{base_stem}_subject_{reg_sub_code}_students.csv"
+            if reg_sub_code != "ALL"
+            else f"{base_stem}_filtered_register.csv"
+        )
+        st.download_button(
+            "Download Filtered Student Register CSV",
+            data=export_complete_csv_bytes(reg_df),
+            file_name=dl_name,
+            mime="text/csv",
+        )

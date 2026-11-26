@@ -60,10 +60,19 @@ export interface CandidateRecord {
   performanceBand: string;
 }
 
+export interface SubjectTopper {
+  rank: number;
+  candidate: CandidateRecord;
+  marks: number;
+  grade: string;
+}
+
 export interface SubjectStat {
   subjectCode: string;
   subjectName: string;
   studentsAppeared: number;
+  totalMarksSum: number;
+  qualityIndex: number; // totalMarksSum / studentsAppeared
   meanMarks: number;
   medianMarks: number;
   highestMarks: number;
@@ -73,6 +82,7 @@ export interface SubjectStat {
   gradeCounts: Record<string, number>;
   qualityCount: number; // A1 + A2 count
   qualityPercentage: number; // (A1 + A2) / studentsAppeared
+  topStudents: SubjectTopper[];
 }
 
 export interface PerformanceBandCount {
@@ -126,7 +136,7 @@ export interface ParsedGazette {
 
 export interface CustomFilterState {
   searchQuery: string;
-  result: string;
+  results: string[]; // empty array means ALL statuses
   gender: string;
   performanceBand: string;
   subjectCode: string;
