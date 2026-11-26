@@ -1131,11 +1131,21 @@ with tab_custom:
                 "Subject Combination": "Subject_Combo",
             }
             src_col = dim_map[r_dim]
+            gender_series = (
+                source_df["Gender"]
+                .map({"M": "Male (M)", "F": "Female (F)"})
+                .fillna(source_df["Gender"])
+            )
+            row_key_series = (
+                gender_series
+                if r_dim == "Gender"
+                else source_df[src_col].replace("", "None").fillna("None")
+            )
             work = pd.DataFrame(
                 {
-                    "RowKey": source_df[src_col].replace("", "None").fillna("None"),
+                    "RowKey": row_key_series,
                     "Performance Band": source_df["Performance_Band"],
-                    "Gender": source_df["Gender"].map({"M": "Male (M)", "F": "Female (F)"}).fillna(source_df["Gender"]),
+                    "Gender": gender_series,
                     "Result Status": source_df["Result"],
                     "Score": source_df["Best5_Percentage"].astype(float),
                     "IsPass": (source_df["Result"] == "PASS").astype(float),
@@ -1162,8 +1172,11 @@ with tab_custom:
         if work.empty:
             return pd.DataFrame()
 
+        # Dedicated numeric column so values never collides with index="RowKey" in pandas pivot_table
+        work["_Count"] = 1
+
         if met == "Candidate Count (N)":
-            val_col, agg_fn = "RowKey", "count"
+            val_col, agg_fn = "_Count", "sum"
         elif met == "Mean Score / %":
             val_col, agg_fn = "Score", "mean"
         elif met == "Median Score / %":
@@ -1173,7 +1186,7 @@ with tab_custom:
         elif met == "Lowest Score / %":
             val_col, agg_fn = "Score", "min"
         else:
-            val_col, agg_fn = "IsPass", lambda s: round(float(s.mean()) * 100, 1) if len(s) else np.nan
+            val_col, agg_fn = "IsPass", "mean"
 
         if c_dim == "None":
             piv = work.groupby("RowKey", dropna=False)[val_col].agg(agg_fn).to_frame(name=met)
@@ -1196,10 +1209,13 @@ with tab_custom:
 
         if met == "Candidate Count (N)":
             piv = piv.fillna(0).astype(int)
+        elif met == "Pass Rate %":
+            piv = (piv * 100).round(1)
         else:
             piv = piv.round(2)
 
         piv.index.name = r_dim
+        piv.columns.name = None
         return piv
 
     pivot_df = build_pivot_dataframe(filtered_df, row_dim, col_dim, metric_choice)
@@ -1220,7 +1236,12 @@ with tab_custom:
                 color_discrete_sequence=["#1D4ED8"],
             )
         else:
-            melted = plot_reset.melt(id_vars=row_dim, var_name=col_dim, value_name=metric_choice)
+            col_var_name = f"{col_dim} (Breakdown)" if col_dim == row_dim else col_dim
+            melted = plot_reset.melt(
+                id_vars=row_dim,
+                var_name=col_var_name,
+                value_name=metric_choice,
+            )
             color_map = GRADE_COLORS if col_dim == "Grade (A1–E)" else (
                 BAND_COLORS if col_dim == "Performance Band" else None
             )
@@ -1228,7 +1249,7 @@ with tab_custom:
                 melted,
                 x=row_dim,
                 y=metric_choice,
-                color=col_dim,
+                color=col_var_name,
                 barmode="stack" if metric_choice == "Candidate Count (N)" else "group",
                 color_discrete_map=color_map,
             )
