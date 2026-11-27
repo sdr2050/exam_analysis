@@ -37,6 +37,7 @@ interface CustomAnalysisWorkbenchProps {
 const DEFAULT_FILTERS: CustomFilterState = {
   searchQuery: "",
   results: [],
+  sections: [],
   gender: "ALL",
   performanceBand: "ALL",
   subjectCode: "ALL",
@@ -84,6 +85,14 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
 
       // Result status (multi-select; empty means ALL)
       if (filters.results.length > 0 && !filters.results.includes(cand.result || "Unknown")) {
+        return false;
+      }
+
+      // Section (multi-select; empty means ALL)
+      if (
+        filters.sections.length > 0 &&
+        !filters.sections.includes(cand.section || "Unassigned")
+      ) {
         return false;
       }
 
@@ -265,6 +274,30 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
     });
   };
 
+  const availableSections = useMemo(() => {
+    if (gazette.sections.length === 0) return [];
+    const present = Array.from(
+      new Set(gazette.candidates.map((c) => c.section || "Unassigned"))
+    );
+    return present.sort((a, b) => {
+      if (a === "Unassigned") return 1;
+      if (b === "Unassigned") return -1;
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+    });
+  }, [gazette.candidates, gazette.sections]);
+
+  const toggleSectionFilter = (sec: string) => {
+    setFilters((prev) => {
+      const next = prev.sections.includes(sec)
+        ? prev.sections.filter((s) => s !== sec)
+        : [...prev.sections, sec];
+      return {
+        ...prev,
+        sections: next.length === availableSections.length ? [] : next,
+      };
+    });
+  };
+
   return (
     <div className="space-y-6">
       {/* Analytical Presets Strip */}
@@ -406,6 +439,58 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
               })}
             </div>
           </div>
+
+          {/* Multi-Select Section Filter (shown when section file is loaded) */}
+          {availableSections.length > 0 && (
+            <div className="sm:col-span-2 md:col-span-3 lg:col-span-6">
+              <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                Student Section (select one or multiple)
+              </label>
+              <div className="flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setFilters({ ...filters, sections: [] })}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-md border transition-colors ${
+                    filters.sections.length === 0
+                      ? "bg-slate-900 text-white border-slate-900"
+                      : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  {filters.sections.length === 0 && <Check className="w-3 h-3" />}
+                  All Sections ({gazette.candidates.length})
+                </button>
+                {availableSections.map((sec) => {
+                  const isSelected = filters.sections.includes(sec);
+                  const count = gazette.candidates.filter(
+                    (c) => (c.section || "Unassigned") === sec
+                  ).length;
+                  return (
+                    <button
+                      key={sec}
+                      type="button"
+                      onClick={() => toggleSectionFilter(sec)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-mono font-medium rounded-md border transition-colors ${
+                        isSelected
+                          ? "bg-emerald-50 text-emerald-900 border-emerald-400"
+                          : "bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100"
+                      }`}
+                    >
+                      <span
+                        className={`inline-flex items-center justify-center w-3.5 h-3.5 rounded-xs border ${
+                          isSelected
+                            ? "bg-emerald-600 border-emerald-600 text-white"
+                            : "border-slate-300 bg-white"
+                        }`}
+                      >
+                        {isSelected && <Check className="w-2.5 h-2.5 stroke-[3]" />}
+                      </span>
+                      {sec === "Unassigned" ? "Unassigned" : `Sec ${sec}`} ({count})
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Gender */}
           <div>
@@ -652,6 +737,7 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
                   className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-md focus:border-blue-600 outline-hidden font-medium"
                 >
                   <option value="subject">Subject</option>
+                  {availableSections.length > 0 && <option value="section">Section</option>}
                   <option value="performanceBand">Performance Band</option>
                   <option value="gender">Gender</option>
                   <option value="result">Result Status</option>
@@ -671,6 +757,7 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
                   className="w-full px-3 py-1.5 text-xs bg-white border border-slate-200 rounded-md focus:border-blue-600 outline-hidden font-medium"
                 >
                   <option value="none">None (Single Metric Summary)</option>
+                  {availableSections.length > 0 && <option value="section">Section</option>}
                   <option value="grade">Grade (A1 to E)</option>
                   <option value="performanceBand">Performance Band</option>
                   <option value="gender">Gender (M/F)</option>
@@ -827,6 +914,9 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
                     <tr>
                       <th className="py-2.5 px-3">Roll No</th>
                       <th className="py-2.5 px-3">Candidate Name</th>
+                      {availableSections.length > 0 && (
+                        <th className="py-2.5 px-3 text-center">Section</th>
+                      )}
                       <th className="py-2.5 px-3 text-center">Gender</th>
                       <th className="py-2.5 px-3 text-center">Result</th>
                       {filters.subjectCode !== "ALL" && (
@@ -860,6 +950,11 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
                           <td className="py-2.5 px-3 font-semibold text-slate-900 group-hover:text-blue-700">
                             {c.candidateName}
                           </td>
+                          {availableSections.length > 0 && (
+                            <td className="py-2.5 px-3 text-center font-mono text-emerald-800 font-semibold">
+                              {c.section || "Unassigned"}
+                            </td>
+                          )}
                           <td className="py-2.5 px-3 text-center font-mono text-slate-600">
                             {c.gender}
                           </td>

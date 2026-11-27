@@ -231,106 +231,175 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
     }
   }
 
+  return buildGazetteAnalytics(candidates, sortedSubjectCodes, {
+    fileName,
+    schoolCode,
+    schoolName,
+    region,
+    examDate,
+    examTitle,
+    sections: [],
+  });
+}
+
+/**
+ * Recomputes all subject statistics (including Quality Index & Top 5), overall summary
+ * (including Distinctions, Performance Bands, Grade Distribution, and Insights)
+ * for a given candidate subset (e.g. when filtering by Section or applying a section file).
+ */
+export function recomputeGazetteFromCandidates(
+  base: ParsedGazette,
+  candidates: CandidateRecord[],
+  overrides?: {
+    sections?: string[];
+    sectionFileName?: string;
+    sectionMatchedCount?: number;
+  }
+): ParsedGazette {
+  return buildGazetteAnalytics(candidates, base.sortedSubjectCodes, {
+    fileName: base.fileName,
+    schoolCode: base.schoolCode,
+    schoolName: base.schoolName,
+    region: base.region,
+    examDate: base.examDate,
+    examTitle: base.examTitle,
+    sections: overrides?.sections !== undefined ? overrides.sections : base.sections,
+    sectionFileName:
+      overrides && "sectionFileName" in overrides
+        ? overrides.sectionFileName
+        : base.sectionFileName,
+    sectionMatchedCount:
+      overrides && "sectionMatchedCount" in overrides
+        ? overrides.sectionMatchedCount
+        : base.sectionMatchedCount,
+  });
+}
+
+function buildGazetteAnalytics(
+  candidates: CandidateRecord[],
+  sortedSubjectCodes: string[],
+  meta: {
+    fileName: string;
+    schoolCode: string;
+    schoolName: string;
+    region: string;
+    examDate: string;
+    examTitle: string;
+    sections: string[];
+    sectionFileName?: string;
+    sectionMatchedCount?: number;
+  }
+): ParsedGazette {
   // Build Subject Statistics (including Quality Index & Top 5 Students per Subject)
-  const subjectStats: SubjectStat[] = sortedSubjectCodes.map((code) => {
-    const subName = CBSE_SUBJECT_CODES[code] || `Subject ${code}`;
-    const scores: number[] = [];
-    const appearedEntries: { candidate: CandidateRecord; marks: number; grade: string }[] = [];
-    const gradeCounts: Record<string, number> = {
-      A1: 0, A2: 0, B1: 0, B2: 0, C1: 0, C2: 0, D1: 0, D2: 0, E: 0,
-    };
+  const subjectStats: SubjectStat[] = sortedSubjectCodes
+    .map((code) => {
+      const subName = CBSE_SUBJECT_CODES[code] || `Subject ${code}`;
+      const scores: number[] = [];
+      const appearedEntries: { candidate: CandidateRecord; marks: number; grade: string }[] = [];
+      const gradeCounts: Record<string, number> = {
+        A1: 0,
+        A2: 0,
+        B1: 0,
+        B2: 0,
+        C1: 0,
+        C2: 0,
+        D1: 0,
+        D2: 0,
+        E: 0,
+      };
 
-    let passCount = 0;
+      let passCount = 0;
 
-    for (const cand of candidates) {
-      const subScore = cand.subjects[code];
-      if (subScore && subScore.marks !== null) {
-        scores.push(subScore.marks);
-        appearedEntries.push({
-          candidate: cand,
-          marks: subScore.marks,
-          grade: subScore.grade,
-        });
-        if (subScore.grade && STANDARD_GRADES.includes(subScore.grade as any)) {
-          gradeCounts[subScore.grade] = (gradeCounts[subScore.grade] || 0) + 1;
-        }
-        if (subScore.grade !== "E") {
-          passCount++;
+      for (const cand of candidates) {
+        const subScore = cand.subjects[code];
+        if (subScore && subScore.marks !== null) {
+          scores.push(subScore.marks);
+          appearedEntries.push({
+            candidate: cand,
+            marks: subScore.marks,
+            grade: subScore.grade,
+          });
+          if (subScore.grade && STANDARD_GRADES.includes(subScore.grade as any)) {
+            gradeCounts[subScore.grade] = (gradeCounts[subScore.grade] || 0) + 1;
+          }
+          if (subScore.grade !== "E") {
+            passCount++;
+          }
         }
       }
-    }
 
-    const studentsAppeared = scores.length;
-    let totalMarksSum = 0;
-    let qualityIndex = 0;
-    let meanMarks = 0;
-    let medianMarks = 0;
-    let highestMarks = 0;
-    let lowestMarks = 0;
-    let passPercentage = 0;
+      const studentsAppeared = scores.length;
+      let totalMarksSum = 0;
+      let qualityIndex = 0;
+      let meanMarks = 0;
+      let medianMarks = 0;
+      let highestMarks = 0;
+      let lowestMarks = 0;
+      let passPercentage = 0;
 
-    if (studentsAppeared > 0) {
-      totalMarksSum = scores.reduce((a, b) => a + b, 0);
-      qualityIndex = Number((totalMarksSum / studentsAppeared).toFixed(2));
-      meanMarks = qualityIndex;
-      const sorted = [...scores].sort((a, b) => a - b);
-      const mid = Math.floor(sorted.length / 2);
-      medianMarks =
-        sorted.length % 2 !== 0
-          ? sorted[mid]
-          : Number(((sorted[mid - 1] + sorted[mid]) / 2).toFixed(1));
-      highestMarks = Math.max(...scores);
-      lowestMarks = Math.min(...scores);
-      passPercentage = Number(((passCount / studentsAppeared) * 100).toFixed(2));
-    }
+      if (studentsAppeared > 0) {
+        totalMarksSum = scores.reduce((a, b) => a + b, 0);
+        qualityIndex = Number((totalMarksSum / studentsAppeared).toFixed(2));
+        meanMarks = qualityIndex;
+        const sorted = [...scores].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        medianMarks =
+          sorted.length % 2 !== 0
+            ? sorted[mid]
+            : Number(((sorted[mid - 1] + sorted[mid]) / 2).toFixed(1));
+        highestMarks = Math.max(...scores);
+        lowestMarks = Math.min(...scores);
+        passPercentage = Number(((passCount / studentsAppeared) * 100).toFixed(2));
+      }
 
-    const qualityCount = (gradeCounts["A1"] || 0) + (gradeCounts["A2"] || 0);
-    const qualityPercentage =
-      studentsAppeared > 0 ? Number(((qualityCount / studentsAppeared) * 100).toFixed(2)) : 0;
+      const qualityCount = (gradeCounts["A1"] || 0) + (gradeCounts["A2"] || 0);
+      const qualityPercentage =
+        studentsAppeared > 0 ? Number(((qualityCount / studentsAppeared) * 100).toFixed(2)) : 0;
 
-    // Top 5 appeared students with numeric marks (deterministic tie-breaking)
-    const sortedEntries = [...appearedEntries].sort((a, b) => {
-      if (b.marks !== a.marks) return b.marks - a.marks;
-      const b5Diff = (b.candidate.best5Percentage ?? -1) - (a.candidate.best5Percentage ?? -1);
-      if (b5Diff !== 0) return b5Diff;
-      const totDiff = (b.candidate.totalMarksAll ?? -1) - (a.candidate.totalMarksAll ?? -1);
-      if (totDiff !== 0) return totDiff;
-      return a.candidate.rollNo.localeCompare(b.candidate.rollNo);
-    });
-
-    const topStudents: SubjectTopper[] = [];
-    for (let idx = 0; idx < Math.min(5, sortedEntries.length); idx++) {
-      const entry = sortedEntries[idx];
-      const rank =
-        idx > 0 && entry.marks === sortedEntries[idx - 1].marks
-          ? topStudents[idx - 1].rank
-          : idx + 1;
-      topStudents.push({
-        rank,
-        candidate: entry.candidate,
-        marks: entry.marks,
-        grade: entry.grade,
+      // Top 5 appeared students with numeric marks (deterministic tie-breaking)
+      const sortedEntries = [...appearedEntries].sort((a, b) => {
+        if (b.marks !== a.marks) return b.marks - a.marks;
+        const b5Diff = (b.candidate.best5Percentage ?? -1) - (a.candidate.best5Percentage ?? -1);
+        if (b5Diff !== 0) return b5Diff;
+        const totDiff = (b.candidate.totalMarksAll ?? -1) - (a.candidate.totalMarksAll ?? -1);
+        if (totDiff !== 0) return totDiff;
+        return a.candidate.rollNo.localeCompare(b.candidate.rollNo);
       });
-    }
 
-    return {
-      subjectCode: code,
-      subjectName: subName,
-      studentsAppeared,
-      totalMarksSum,
-      qualityIndex,
-      meanMarks,
-      medianMarks,
-      highestMarks,
-      lowestMarks,
-      passCount,
-      passPercentage,
-      gradeCounts,
-      qualityCount,
-      qualityPercentage,
-      topStudents,
-    };
-  }).filter((s) => s.studentsAppeared > 0);
+      const topStudents: SubjectTopper[] = [];
+      for (let idx = 0; idx < Math.min(5, sortedEntries.length); idx++) {
+        const entry = sortedEntries[idx];
+        const rank =
+          idx > 0 && entry.marks === sortedEntries[idx - 1].marks
+            ? topStudents[idx - 1].rank
+            : idx + 1;
+        topStudents.push({
+          rank,
+          candidate: entry.candidate,
+          marks: entry.marks,
+          grade: entry.grade,
+        });
+      }
+
+      return {
+        subjectCode: code,
+        subjectName: subName,
+        studentsAppeared,
+        totalMarksSum,
+        qualityIndex,
+        meanMarks,
+        medianMarks,
+        highestMarks,
+        lowestMarks,
+        passCount,
+        passPercentage,
+        gradeCounts,
+        qualityCount,
+        qualityPercentage,
+        topStudents,
+      };
+    })
+    .filter((s) => s.studentsAppeared > 0);
 
   // Build Overall Summary
   const totalCandidates = candidates.length;
@@ -340,7 +409,9 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
     resultBreakdown[res] = (resultBreakdown[res] || 0) + 1;
   }
 
-  const passedCandidates = candidates.filter((c) => c.result === "PASS" && c.best5Percentage !== null);
+  const passedCandidates = candidates.filter(
+    (c) => c.result === "PASS" && c.best5Percentage !== null
+  );
   const passCount = resultBreakdown["PASS"] || 0;
   const passPercentage =
     totalCandidates > 0 ? Number(((passCount / totalCandidates) * 100).toFixed(2)) : 0;
@@ -376,11 +447,41 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
     colorClass: string;
     badgeBg: string;
   }[] = [
-    { label: "90% & Above", minPct: 90, maxPct: 100, colorClass: "text-emerald-700 bg-emerald-50", badgeBg: "bg-emerald-600" },
-    { label: "75% - 89.9% (Distinction)", minPct: 75, maxPct: 89.99, colorClass: "text-blue-700 bg-blue-50", badgeBg: "bg-blue-600" },
-    { label: "60% - 74.9%", minPct: 60, maxPct: 74.99, colorClass: "text-indigo-700 bg-indigo-50", badgeBg: "bg-indigo-600" },
-    { label: "50% - 59.9%", minPct: 50, maxPct: 59.99, colorClass: "text-amber-700 bg-amber-50", badgeBg: "bg-amber-600" },
-    { label: "Below 50%", minPct: 0, maxPct: 49.99, colorClass: "text-rose-700 bg-rose-50", badgeBg: "bg-rose-600" },
+    {
+      label: "90% & Above",
+      minPct: 90,
+      maxPct: 100,
+      colorClass: "text-emerald-700 bg-emerald-50",
+      badgeBg: "bg-emerald-600",
+    },
+    {
+      label: "75% - 89.9% (Distinction)",
+      minPct: 75,
+      maxPct: 89.99,
+      colorClass: "text-blue-700 bg-blue-50",
+      badgeBg: "bg-blue-600",
+    },
+    {
+      label: "60% - 74.9%",
+      minPct: 60,
+      maxPct: 74.99,
+      colorClass: "text-indigo-700 bg-indigo-50",
+      badgeBg: "bg-indigo-600",
+    },
+    {
+      label: "50% - 59.9%",
+      minPct: 50,
+      maxPct: 59.99,
+      colorClass: "text-amber-700 bg-amber-50",
+      badgeBg: "bg-amber-600",
+    },
+    {
+      label: "Below 50%",
+      minPct: 0,
+      maxPct: 49.99,
+      colorClass: "text-rose-700 bg-rose-50",
+      badgeBg: "bg-rose-600",
+    },
   ];
 
   const performanceBands: PerformanceBandCount[] = bandDefs.map((def) => {
@@ -400,10 +501,16 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
     };
   });
 
-  const distinctionCount = passedCandidates.filter((c) => (c.best5Percentage as number) >= 75).length;
+  const distinctionCount = passedCandidates.filter(
+    (c) => (c.best5Percentage as number) >= 75
+  ).length;
   const distinctionPercentage =
-    passedCandidates.length > 0 ? Number(((distinctionCount / passedCandidates.length) * 100).toFixed(2)) : 0;
-  const ninetyPlusCount = passedCandidates.filter((c) => (c.best5Percentage as number) >= 90).length;
+    passedCandidates.length > 0
+      ? Number(((distinctionCount / passedCandidates.length) * 100).toFixed(2))
+      : 0;
+  const ninetyPlusCount = passedCandidates.filter(
+    (c) => (c.best5Percentage as number) >= 90
+  ).length;
 
   // Overall Grade Distribution across all subjects taken
   const overallGradeCounts: Record<string, number> = {};
@@ -438,16 +545,16 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
   // Automated Academic Insights
   const insights: AcademicInsight[] = [];
 
-  // Pass rate insight
   insights.push({
     type: passPercentage >= 95 ? "positive" : passPercentage >= 80 ? "neutral" : "warning",
     title: "Institutional Pass Rate",
     description: `${passCount} of ${totalCandidates} candidates (${passPercentage}%) successfully cleared the examination.${
-      resultLaterCount > 0 ? ` Note: ${resultLaterCount} candidate(s) currently recorded under R.L. (Result Later).` : ""
+      resultLaterCount > 0
+        ? ` Note: ${resultLaterCount} candidate(s) currently recorded under R.L. (Result Later).`
+        : ""
     }${compartmentCount > 0 ? ` ${compartmentCount} candidate(s) placed in Compartment.` : ""}`,
   });
 
-  // Distinction cohort
   if (distinctionCount > 0) {
     insights.push({
       type: "highlight",
@@ -456,7 +563,6 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
     });
   }
 
-  // Strongest subject by mean
   if (subjectStats.length > 0) {
     const sortedByMean = [...subjectStats].sort((a, b) => b.meanMarks - a.meanMarks);
     const topSub = sortedByMean[0];
@@ -498,15 +604,18 @@ export function parseCbseGazette(text: string, fileName = "gazette.txt"): Parsed
   };
 
   return {
-    fileName,
-    schoolCode,
-    schoolName,
-    region,
-    examDate,
-    examTitle,
+    fileName: meta.fileName,
+    schoolCode: meta.schoolCode,
+    schoolName: meta.schoolName,
+    region: meta.region,
+    examDate: meta.examDate,
+    examTitle: meta.examTitle,
     candidates,
     sortedSubjectCodes,
     subjectStats,
     summary,
+    sections: meta.sections,
+    sectionFileName: meta.sectionFileName,
+    sectionMatchedCount: meta.sectionMatchedCount,
   };
 }

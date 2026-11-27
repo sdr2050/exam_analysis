@@ -68,10 +68,22 @@ export function buildPivotMatrix(
       ? candidates.filter((c) => matchesDistinctionFilter(c.best5Percentage, distinctionFilter))
       : candidates;
 
+  const sortSections = (list: string[]) =>
+    list.sort((a, b) => {
+      if (a === "Unassigned") return 1;
+      if (b === "Unassigned") return -1;
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+    });
+
   // Determine Column Headers
   let colHeaders: string[] = [];
   if (colDimension === "none") {
     colHeaders = ["Metric Value"];
+  } else if (colDimension === "section") {
+    const secs = Array.from(
+      new Set(effectiveCandidates.map((c) => c.section || "Unassigned"))
+    );
+    colHeaders = sortSections(secs);
   } else if (colDimension === "grade") {
     colHeaders = [...STANDARD_GRADES];
   } else if (colDimension === "performanceBand") {
@@ -103,6 +115,11 @@ export function buildPivotMatrix(
       key: s.subjectCode,
       label: `${s.subjectCode} — ${s.subjectName}`,
     }));
+  } else if (rowDimension === "section") {
+    const secs = Array.from(
+      new Set(effectiveCandidates.map((c) => c.section || "Unassigned"))
+    );
+    rowLabels = sortSections(secs).map((sec) => ({ key: sec, label: `Section ${sec}` }));
   } else if (rowDimension === "performanceBand") {
     const bands = [
       "90% & Above",
@@ -236,6 +253,8 @@ export function buildPivotMatrix(
         if (!sub) return false;
         return matchesDistinctionFilter(sub.marks, distinctionFilter);
       });
+    } else if (rowDimension === "section") {
+      rowCands = effectiveCandidates.filter((c) => (c.section || "Unassigned") === rowItem.key);
     } else if (rowDimension === "performanceBand") {
       rowCands = effectiveCandidates.filter((c) => c.performanceBand === rowItem.key);
     } else if (rowDimension === "gender") {
@@ -262,7 +281,9 @@ export function buildPivotMatrix(
       for (const colHeader of colHeaders) {
         let cellCands: CandidateRecord[] = [];
 
-        if (colDimension === "grade") {
+        if (colDimension === "section") {
+          cellCands = rowCands.filter((c) => (c.section || "Unassigned") === colHeader);
+        } else if (colDimension === "grade") {
           // If row is subject, check this subject's grade (rowCands already filtered by distinctionFilter)
           if (subCode) {
             cellCands = rowCands.filter((c) => c.subjects[subCode!]?.grade === colHeader);

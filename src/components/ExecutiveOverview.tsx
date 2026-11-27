@@ -447,6 +447,9 @@ export const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({
                           </div>
                           <div className="text-[11px] font-mono text-slate-400 tabular-nums">
                             {topper.candidate.rollNo}
+                            {topper.candidate.section
+                              ? ` · Sec ${topper.candidate.section}`
+                              : ""}
                             {topper.candidate.result !== "PASS"
                               ? ` · ${topper.candidate.result}`
                               : ""}
@@ -541,6 +544,9 @@ export const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({
                 <th className="py-3 px-4">Rank</th>
                 <th className="py-3 px-4">Roll No</th>
                 <th className="py-3 px-4">Candidate Name</th>
+                {gazette.sections.length > 0 && (
+                  <th className="py-3 px-4 text-center">Section</th>
+                )}
                 <th className="py-3 px-4 text-center">Gender</th>
                 <th className="py-3 px-4 text-right">Best-5 Marks</th>
                 <th className="py-3 px-4 text-right">Best-5 %</th>
@@ -567,6 +573,11 @@ export const ExecutiveOverview: React.FC<ExecutiveOverviewProps> = ({
                   <td className="py-3 px-4 font-semibold text-slate-900 group-hover:text-blue-700">
                     {student.candidateName}
                   </td>
+                  {gazette.sections.length > 0 && (
+                    <td className="py-3 px-4 text-center font-mono font-semibold text-emerald-800">
+                      {student.section || "Unassigned"}
+                    </td>
+                  )}
                   <td className="py-3 px-4 text-center font-mono text-slate-600">
                     {student.gender}
                   </td>

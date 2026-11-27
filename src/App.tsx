@@ -4,7 +4,12 @@
  */
 
 import React, { useState, useMemo } from "react";
-import { parseCbseGazette } from "./utils/gazetteParser";
+import { parseCbseGazette, recomputeGazetteFromCandidates } from "./utils/gazetteParser";
+import {
+  applySectionMappingToGazette,
+  clearSectionMappingFromGazette,
+  ParsedSectionFile,
+} from "./utils/sectionMapper";
 import { ParsedGazette, CandidateRecord } from "./types/exam";
 import { SAMPLE_GAZETTE_TEXT, SAMPLE_GAZETTE_FILENAME } from "./data/sampleGazette";
 import {
@@ -20,16 +25,19 @@ import { CustomAnalysisWorkbench } from "./components/CustomAnalysisWorkbench";
 import { StudentDirectory } from "./components/StudentDirectory";
 import { StudentScorecardDrawer } from "./components/StudentScorecardDrawer";
 import { UploadModal } from "./components/UploadModal";
+import { SectionUploadModal } from "./components/SectionUploadModal";
 import { PrintableReport } from "./components/PrintableReport";
 
 export default function App() {
   // Initialize with bundled sample gazette for instant zero-latency load
-  const [gazette, setGazette] = useState<ParsedGazette>(() => {
+  const [fullGazette, setFullGazette] = useState<ParsedGazette>(() => {
     return parseCbseGazette(SAMPLE_GAZETTE_TEXT, SAMPLE_GAZETTE_FILENAME);
   });
 
+  const [selectedSections, setSelectedSections] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<"overview" | "subjects" | "custom" | "students">("overview");
   const [isUploadOpen, setIsUploadOpen] = useState(false);
+  const [isSectionUploadOpen, setIsSectionUploadOpen] = useState(false);
   const [selectedCandidate, setSelectedCandidate] = useState<CandidateRecord | null>(null);
 
   // Cross-view drill down state
@@ -50,9 +58,45 @@ export default function App() {
     }, 3500);
   };
 
+  // Recompute gazette analytics (Quality Index, Distinctions, Top 5, Subject Stats, Insights) for active sections
+  const activeGazette = useMemo(() => {
+    if (selectedSections.length === 0 || fullGazette.sections.length === 0) {
+      return fullGazette;
+    }
+    const filtered = fullGazette.candidates.filter((c) =>
+      selectedSections.includes(c.section || "Unassigned")
+    );
+    return recomputeGazetteFromCandidates(fullGazette, filtered);
+  }, [fullGazette, selectedSections]);
+
+  const handleToggleSection = (sec: string) => {
+    setSelectedSections((prev) => {
+      const next = prev.includes(sec) ? prev.filter((s) => s !== sec) : [...prev, sec];
+      return next.length === fullGazette.sections.length ? [] : next;
+    });
+  };
+
+  const handleSectionMappingLoaded = (mapping: ParsedSectionFile) => {
+    const merged = applySectionMappingToGazette(fullGazette, mapping);
+    setFullGazette(merged);
+    setSelectedSections([]);
+    const namedSections = merged.sections.filter((s) => s !== "Unassigned").length;
+    showToast(
+      `Mapped ${merged.sectionMatchedCount ?? 0} of ${merged.candidates.length} students across ${namedSections} section(s)`
+    );
+  };
+
+  const handleClearSectionMapping = () => {
+    const cleared = clearSectionMappingFromGazette(fullGazette);
+    setFullGazette(cleared);
+    setSelectedSections([]);
+    showToast("Removed section mapping file");
+  };
+
   const handleResetToSample = () => {
     const sample = parseCbseGazette(SAMPLE_GAZETTE_TEXT, SAMPLE_GAZETTE_FILENAME);
-    setGazette(sample);
+    setFullGazette(sample);
+    setSelectedSections([]);
     setDrillDownBand(undefined);
     setDrillDownSubject(undefined);
     setDrillDownGrade(undefined);
@@ -63,7 +107,8 @@ export default function App() {
   };
 
   const handleGazetteLoaded = (newGazette: ParsedGazette) => {
-    setGazette(newGazette);
+    setFullGazette(newGazette);
+    setSelectedSections([]);
     setActiveTab("overview");
     setDrillDownBand(undefined);
     setDrillDownSubject(undefined);
@@ -75,18 +120,18 @@ export default function App() {
   };
 
   const handleExportComplete = () => {
-    exportCompleteResultCSV(gazette);
-    showToast(`Exported ${gazette.fileName.replace(/\.[^/.]+$/, "")}_complete_result.csv`);
+    exportCompleteResultCSV(activeGazette);
+    showToast(`Exported ${activeGazette.fileName.replace(/\.[^/.]+$/, "")}_complete_result.csv`);
   };
 
   const handleExportSubject = () => {
-    exportSubjectAnalysisCSV(gazette);
-    showToast(`Exported ${gazette.fileName.replace(/\.[^/.]+$/, "")}_subject_analysis.csv`);
+    exportSubjectAnalysisCSV(activeGazette);
+    showToast(`Exported ${activeGazette.fileName.replace(/\.[^/.]+$/, "")}_subject_analysis.csv`);
   };
 
   const handleExportSubjectToppers = () => {
-    exportSubjectToppersCSV(gazette);
-    showToast(`Exported ${gazette.fileName.replace(/\.[^/.]+$/, "")}_subject_top5_students.csv`);
+    exportSubjectToppersCSV(activeGazette);
+    showToast(`Exported ${activeGazette.fileName.replace(/\.[^/.]+$/, "")}_subject_top5_students.csv`);
   };
 
   const handlePrint = () => {
@@ -134,15 +179,21 @@ export default function App() {
         onExportCompleteCSV={handleExportComplete}
         onExportSubjectCSV={handleExportSubject}
         onPrint={handlePrint}
-        schoolCode={gazette.schoolCode}
+        schoolCode={fullGazette.schoolCode}
       />
 
-      {/* Header Metadata Banner */}
+      {/* Header Metadata Banner + Global Section Filter */}
       <div className="no-print">
         <HeaderMetadataBanner
-          gazette={gazette}
+          fullGazette={fullGazette}
+          activeGazette={activeGazette}
+          selectedSections={selectedSections}
+          onToggleSection={handleToggleSection}
+          onClearSectionFilter={() => setSelectedSections([])}
           onResetToSample={handleResetToSample}
           onOpenUpload={() => setIsUploadOpen(true)}
+          onOpenSectionUpload={() => setIsSectionUploadOpen(true)}
+          onClearSectionMapping={handleClearSectionMapping}
         />
       </div>
 
@@ -150,7 +201,7 @@ export default function App() {
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 no-print">
         {activeTab === "overview" && (
           <ExecutiveOverview
-            gazette={gazette}
+            gazette={activeGazette}
             onSelectCandidate={setSelectedCandidate}
             onFilterByBand={handleFilterByBand}
             onFilterByGrade={handleFilterByGrade}
@@ -162,7 +213,7 @@ export default function App() {
 
         {activeTab === "subjects" && (
           <SubjectBreakdown
-            gazette={gazette}
+            gazette={activeGazette}
             onFilterBySubject={handleFilterBySubject}
             onViewSubjectStudents={handleViewSubjectStudents}
           />
@@ -170,7 +221,7 @@ export default function App() {
 
         {activeTab === "custom" && (
           <CustomAnalysisWorkbench
-            gazette={gazette}
+            gazette={activeGazette}
             onSelectCandidate={setSelectedCandidate}
             initialBand={drillDownBand}
             initialSubject={drillDownSubject}
@@ -181,7 +232,7 @@ export default function App() {
 
         {activeTab === "students" && (
           <StudentDirectory
-            gazette={gazette}
+            gazette={activeGazette}
             onSelectCandidate={setSelectedCandidate}
             initialSubjectCode={directorySubject}
             initialStatuses={directoryStatuses}
@@ -192,19 +243,28 @@ export default function App() {
       {/* Individual Student Scorecard Drawer */}
       <StudentScorecardDrawer
         candidate={selectedCandidate}
-        subjectStats={gazette.subjectStats}
+        subjectStats={activeGazette.subjectStats}
         onClose={() => setSelectedCandidate(null)}
       />
 
-      {/* Upload Modal */}
+      {/* Upload Gazette Modal */}
       <UploadModal
         isOpen={isUploadOpen}
         onClose={() => setIsUploadOpen(false)}
         onGazetteLoaded={handleGazetteLoaded}
       />
 
+      {/* Upload Section Mapping Modal */}
+      <SectionUploadModal
+        isOpen={isSectionUploadOpen}
+        onClose={() => setIsSectionUploadOpen(false)}
+        gazette={fullGazette}
+        onSectionMappingLoaded={handleSectionMappingLoaded}
+        onClearSectionMapping={handleClearSectionMapping}
+      />
+
       {/* Printable Report Stylesheet & Layout (@media print) */}
-      <PrintableReport gazette={gazette} />
+      <PrintableReport gazette={activeGazette} selectedSections={selectedSections} />
 
       {/* Action Toast Notification */}
       {toastMessage && (

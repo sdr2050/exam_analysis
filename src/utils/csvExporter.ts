@@ -37,6 +37,8 @@ export function exportCompleteResultCSV(gazette: ParsedGazette): void {
   const baseName = gazette.fileName.replace(/\.[^/.]+$/, "");
   const filename = `${baseName}_complete_result.csv`;
 
+  const hasSections = gazette.sections.length > 0;
+
   // Standard Header columns
   const headerCols: string[] = [
     "School_Code",
@@ -45,6 +47,7 @@ export function exportCompleteResultCSV(gazette: ParsedGazette): void {
     "Exam_Date",
     "Roll_No",
     "Candidate_Name",
+    ...(hasSections ? ["Section"] : []),
     "Gender",
     "Result",
     "Compartment_Sub",
@@ -80,6 +83,7 @@ export function exportCompleteResultCSV(gazette: ParsedGazette): void {
       c.examDate,
       c.rollNo,
       c.candidateName,
+      ...(hasSections ? [c.section || "Unassigned"] : []),
       c.gender,
       c.result,
       c.compartmentSub,
@@ -181,6 +185,7 @@ export function exportSubjectToppersCSV(gazette: ParsedGazette): void {
   const baseName = gazette.fileName.replace(/\.[^/.]+$/, "");
   const filename = `${baseName}_subject_top5_students.csv`;
 
+  const hasSections = gazette.sections.length > 0;
   const headers = [
     "Subject_Code",
     "Subject_Name",
@@ -190,6 +195,7 @@ export function exportSubjectToppersCSV(gazette: ParsedGazette): void {
     "Subject_Rank",
     "Roll_No",
     "Candidate_Name",
+    ...(hasSections ? ["Section"] : []),
     "Gender",
     "Marks",
     "Grade",
@@ -210,6 +216,7 @@ export function exportSubjectToppersCSV(gazette: ParsedGazette): void {
         topper.rank,
         topper.candidate.rollNo,
         topper.candidate.candidateName,
+        ...(hasSections ? [topper.candidate.section || "Unassigned"] : []),
         topper.candidate.gender,
         topper.marks,
         topper.grade,
@@ -227,9 +234,11 @@ export function exportSubjectToppersCSV(gazette: ParsedGazette): void {
  * Exports custom filtered candidate list.
  */
 export function exportFilteredStudentsCSV(candidates: CandidateRecord[], fileName = "custom_cohort.csv"): void {
+  const hasSections = candidates.some((c) => Boolean(c.section));
   const headers = [
     "Roll_No",
     "Candidate_Name",
+    ...(hasSections ? ["Section"] : []),
     "Gender",
     "Result",
     "Performance_Band",
@@ -247,6 +256,7 @@ export function exportFilteredStudentsCSV(candidates: CandidateRecord[], fileNam
     const rowVals = [
       c.rollNo,
       c.candidateName,
+      ...(hasSections ? [c.section || "Unassigned"] : []),
       c.gender,
       c.result,
       c.performanceBand,

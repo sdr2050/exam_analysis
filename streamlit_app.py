@@ -1,4 +1,5 @@
 import html
+import io
 import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -423,16 +424,20 @@ def build_subject_toppers_df(
             rank = prev_rank if (prev_mark is not None and mk == prev_mark) else pos
             prev_mark = mk
             prev_rank = rank
-            rows.append(
+            row_item = {
+                "Subject_Code": code,
+                "Subject_Name": str(sub_meta["Subject_Name"]),
+                "Students_Appeared": int(sub_meta["Students_Appeared"]),
+                "Total_Marks_Sum": int(sub_meta["Total_Marks_Sum"]),
+                "Quality_Index": float(sub_meta["Quality_Index"]),
+                "Subject_Rank": rank,
+                "Roll_No": str(r["Roll_No"]),
+                "Candidate_Name": str(r["Candidate_Name"]),
+            }
+            if "Section" in df.columns:
+                row_item["Section"] = str(r["Section"] or "Unassigned")
+            row_item.update(
                 {
-                    "Subject_Code": code,
-                    "Subject_Name": str(sub_meta["Subject_Name"]),
-                    "Students_Appeared": int(sub_meta["Students_Appeared"]),
-                    "Total_Marks_Sum": int(sub_meta["Total_Marks_Sum"]),
-                    "Quality_Index": float(sub_meta["Quality_Index"]),
-                    "Subject_Rank": rank,
-                    "Roll_No": str(r["Roll_No"]),
-                    "Candidate_Name": str(r["Candidate_Name"]),
                     "Gender": str(r["Gender"]),
                     "Marks": mk,
                     "Grade": str(r[col_g] or "—"),
@@ -442,7 +447,130 @@ def build_subject_toppers_df(
                     ),
                 }
             )
+            rows.append(row_item)
     return pd.DataFrame(rows)
+
+
+def _normalize_col_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(name).strip().lower())
+
+
+def _normalize_roll_value(val: object) -> str:
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return ""
+    s = str(val).strip()
+    if not s or s.lower() == "nan":
+        return ""
+    if re.match(r"^\d+\.0+$", s):
+        s = re.sub(r"\.0+$", "", s)
+    return re.sub(r"\s+", "", s)
+
+
+def _normalize_student_name(val: object) -> str:
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return ""
+    return re.sub(r"\s+", " ", str(val).strip().upper())
+
+
+def parse_and_merge_section_file(
+    base_df: pd.DataFrame, raw_bytes: bytes, filename: str
+) -> Tuple[pd.DataFrame, List[str], int, Optional[str]]:
+    """Parse an uploaded CSV/TSV/XLSX/XLS file with Stu_Name, CBSE_Roll_No, Section and merge onto df."""
+    ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
+    try:
+        if ext in ("xlsx", "xls"):
+            sec_df = pd.read_excel(io.BytesIO(raw_bytes), dtype=str)
+        else:
+            sec_df = pd.read_csv(
+                io.BytesIO(raw_bytes), sep=None, engine="python", dtype=str
+            )
+    except Exception as exc:
+        return base_df, [], 0, f"Could not read section file ({filename}): {exc}"
+
+    if sec_df.empty:
+        return base_df, [], 0, "The uploaded section file contains no rows."
+
+    headers = list(sec_df.columns)
+    roll_keys = {"cbserollno", "rollno", "rollnumber", "cbseroll", "roll", "cbserollnum"}
+    sec_keys = {"section", "sec", "classsection", "classsec", "division", "div"}
+    name_keys = {"stuname", "studentname", "candidatename", "name", "student"}
+
+    roll_col = next((h for h in headers if _normalize_col_key(h) in roll_keys), None)
+    sec_col = next((h for h in headers if _normalize_col_key(h) in sec_keys), None)
+    name_col = next((h for h in headers if _normalize_col_key(h) in name_keys), None)
+
+    if roll_col is None or sec_col is None:
+        found = ", ".join(str(h) for h in headers)
+        return (
+            base_df,
+            [],
+            0,
+            f"Missing required columns. Expected Stu_Name, CBSE_Roll_No, and Section. Found: {found}",
+        )
+
+    roll_to_sec: Dict[str, str] = {}
+    raw_name_to_sec: Dict[str, str] = {}
+    name_counts: Dict[str, int] = {}
+
+    for _, row in sec_df.iterrows():
+        sec_val = str(row[sec_col]).strip() if pd.notna(row[sec_col]) else ""
+        if not sec_val or sec_val.lower() == "nan":
+            continue
+        roll_val = _normalize_roll_value(row[roll_col])
+        name_val = _normalize_student_name(row[name_col]) if name_col is not None else ""
+        if roll_val:
+            roll_to_sec[roll_val] = sec_val
+        if name_val:
+            name_counts[name_val] = name_counts.get(name_val, 0) + 1
+            raw_name_to_sec[name_val] = sec_val
+
+    unique_name_to_sec = {k: v for k, v in raw_name_to_sec.items() if name_counts.get(k) == 1}
+
+    merged = base_df.copy()
+    assigned: List[str] = []
+    matched = 0
+    for _, r in merged.iterrows():
+        r_key = _normalize_roll_value(r["Roll_No"])
+        sec = roll_to_sec.get(r_key)
+        if not sec:
+            sec = unique_name_to_sec.get(_normalize_student_name(r["Candidate_Name"]))
+        if sec:
+            matched += 1
+            assigned.append(sec)
+        else:
+            assigned.append("Unassigned")
+
+    if "Section" in merged.columns:
+        merged["Section"] = assigned
+    else:
+        insert_pos = (
+            list(merged.columns).index("Candidate_Name") + 1
+            if "Candidate_Name" in merged.columns
+            else 6
+        )
+        merged.insert(insert_pos, "Section", assigned)
+
+    sections = sorted(
+        set(assigned),
+        key=lambda s: (1 if s == "Unassigned" else 0, s.lower()),
+    )
+    return merged, sections, matched, None
+
+
+def build_section_template_csv_bytes(df: pd.DataFrame) -> bytes:
+    """Return a ready-to-fill CSV template (Stu_Name, CBSE_Roll_No, Section) for the active gazette."""
+    tmpl = pd.DataFrame(
+        {
+            "Stu_Name": df["Candidate_Name"].astype(str),
+            "CBSE_Roll_No": df["Roll_No"].astype(str),
+            "Section": (
+                df["Section"].replace("Unassigned", "")
+                if "Section" in df.columns
+                else ""
+            ),
+        }
+    )
+    return tmpl.to_csv(index=False).encode("utf-8")
 
 
 def export_complete_csv_bytes(df: pd.DataFrame) -> bytes:
@@ -467,6 +595,7 @@ def generate_printable_html(
     analysis_df: pd.DataFrame,
     toppers_df: pd.DataFrame,
     metadata: Dict[str, str],
+    active_section_note: str = "",
 ) -> str:
     """Generate a clean printable HTML academic report for browser Print -> Save as PDF."""
     total_candidates = len(df)
@@ -511,13 +640,16 @@ def generate_printable_html(
             f"</tr>"
         )
 
+    has_sec_col = "Section" in df.columns
     top_rows_html = ""
     for _, r in top5.iterrows():
+        sec_td = f"<td>{html.escape(str(r['Section']))}</td>" if has_sec_col else ""
         top_rows_html += (
             f"<tr>"
             f"<td><b>#{int(r['Rank_Best5'])}</b></td>"
             f"<td>{html.escape(str(r['Roll_No']))}</td>"
             f"<td>{html.escape(str(r['Candidate_Name']))}</td>"
+            f"{sec_td}"
             f"<td class='num'>{r['Best5_Total_500']} / 500</td>"
             f"<td class='num'><b>{r['Best5_Percentage']}%</b></td>"
             f"<td class='num'>{r['Total_Marks_All']}</td>"
@@ -533,11 +665,12 @@ def generate_printable_html(
                 continue
             tr_items = ""
             for _, tr in s_slice.iterrows():
+                sec_lbl = f" ({html.escape(str(tr['Section']))})" if "Section" in s_slice.columns else ""
                 tr_items += (
                     f"<tr>"
                     f"<td><b>#{int(tr['Subject_Rank'])}</b></td>"
                     f"<td>{html.escape(str(tr['Roll_No']))}</td>"
-                    f"<td>{html.escape(str(tr['Candidate_Name']))}</td>"
+                    f"<td>{html.escape(str(tr['Candidate_Name']))}{sec_lbl}</td>"
                     f"<td class='num'><b>{int(tr['Marks'])}</b></td>"
                     f"<td class='num'>{html.escape(str(tr['Grade']))}</td>"
                     f"</tr>"
@@ -556,6 +689,12 @@ def generate_printable_html(
             )
 
     grade_headers = "".join(f"<th class='num'>{g}</th>" for g in STANDARD_GRADES)
+    sec_note_html = (
+        f" &middot; Section Filter: <b>{html.escape(active_section_note)}</b>"
+        if active_section_note
+        else ""
+    )
+    top_sec_hdr = "<th>Section</th>" if has_sec_col else ""
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -583,7 +722,7 @@ def generate_printable_html(
   <div class="hdr">
     <h1>{html.escape(metadata['exam_title'])}</h1>
     <p><b>{html.escape(metadata['school_name'])}</b> (School Code: {html.escape(metadata['school_code'])})</p>
-    <p>Region: {html.escape(metadata['region'])} &middot; Exam Date: {html.escape(metadata['exam_date'])} &middot; File: {html.escape(metadata['file_name'])}</p>
+    <p>Region: {html.escape(metadata['region'])} &middot; Exam Date: {html.escape(metadata['exam_date'])} &middot; File: {html.escape(metadata['file_name'])}{sec_note_html}</p>
   </div>
 
   <h2>1. Executive Summary</h2>
@@ -631,7 +770,7 @@ def generate_printable_html(
   <h2>4. Top 5 Overall Performers (Best-5 Rankers)</h2>
   <table>
     <thead>
-      <tr><th>Rank</th><th>Roll No</th><th>Candidate Name</th><th class="num">Best-5</th><th class="num">Best-5 %</th><th class="num">All Marks</th></tr>
+      <tr><th>Rank</th><th>Roll No</th><th>Candidate Name</th>{top_sec_hdr}<th class="num">Best-5</th><th class="num">Best-5 %</th><th class="num">All Marks</th></tr>
     </thead>
     <tbody>{top_rows_html}</tbody>
   </table>
@@ -672,15 +811,76 @@ with st.sidebar:
         st.warning("Upload a CBSE Gazette `.TXT` file above to begin analysis.")
         st.stop()
 
-    df, analysis_df, sorted_codes, metadata = parse_cbse_gazette_text(raw_text, active_filename)
+    full_df, full_analysis_df, sorted_codes, metadata = parse_cbse_gazette_text(
+        raw_text, active_filename
+    )
 
-    if df.empty:
+    if full_df.empty:
         st.error(
             "No valid CBSE candidate roll-number records were found in this file. "
             "Please upload an official CBSE Gazette `.TXT` file."
         )
         st.stop()
 
+    base_stem = active_filename.rsplit(".", 1)[0]
+
+    # Optional Student Section Mapping Uploader (Stu_Name, CBSE_Roll_No, Section)
+    st.divider()
+    st.markdown("#### Student Section Mapping (Optional)")
+    section_file = st.file_uploader(
+        "Upload Section File (.CSV / .XLSX)",
+        type=["csv", "xlsx", "xls", "tsv", "txt"],
+        help="Upload a 3-column file with Stu_Name, CBSE_Roll_No, and Section to filter Quality Index, Distinction, Top 5, and Pivot Matrix by Section.",
+    )
+    st.download_button(
+        label="Download Section Template CSV",
+        data=build_section_template_csv_bytes(full_df),
+        file_name=f"{base_stem}_section_template.csv",
+        mime="text/csv",
+        use_container_width=True,
+        help="Pre-filled CSV template (Stu_Name, CBSE_Roll_No, Section) for the loaded gazette.",
+    )
+
+    available_sections: List[str] = []
+    section_matched_count = 0
+    selected_global_sections: List[str] = []
+    active_section_note = ""
+
+    if section_file is not None:
+        merged_df, available_sections, section_matched_count, sec_err = parse_and_merge_section_file(
+            full_df, section_file.getvalue(), section_file.name
+        )
+        if sec_err:
+            st.error(sec_err)
+            df = full_df
+            analysis_df = full_analysis_df
+        else:
+            full_df = merged_df
+            named_sec_cnt = len([s for s in available_sections if s != "Unassigned"])
+            st.success(
+                f"Matched **{section_matched_count} / {len(full_df)}** students across **{named_sec_cnt}** section(s)."
+            )
+            selected_global_sections = st.multiselect(
+                "Filter Dashboard by Section",
+                options=available_sections,
+                default=available_sections,
+                help="Applies across Quality Index, Distinctions, Top 5 by Subject, Subject Breakdown, Pivot Matrix, and Reports.",
+            )
+            if not selected_global_sections:
+                st.warning("Select at least one section to view results.")
+                st.stop()
+            if set(selected_global_sections) == set(available_sections):
+                df = full_df
+                analysis_df = full_analysis_df
+            else:
+                df = full_df[full_df["Section"].isin(selected_global_sections)].copy()
+                analysis_df = build_subject_analysis(df, sorted_codes)
+                active_section_note = ", ".join(selected_global_sections)
+    else:
+        df = full_df
+        analysis_df = full_analysis_df
+
+    has_sections = "Section" in df.columns
     subject_toppers_df = build_subject_toppers_df(df, sorted_codes, analysis_df)
 
     st.divider()
@@ -691,33 +891,39 @@ with st.sidebar:
 
     st.divider()
     st.markdown("#### Exports & Print Report")
-    base_stem = active_filename.rsplit(".", 1)[0]
+    sec_file_suffix = (
+        f"_sec_{'_'.join(re.sub(r'[^A-Za-z0-9]+', '', s) for s in selected_global_sections)}"
+        if active_section_note
+        else ""
+    )
 
     st.download_button(
         label="Download Complete Result CSV",
         data=export_complete_csv_bytes(df),
-        file_name=f"{base_stem}_complete_result.csv",
+        file_name=f"{base_stem}{sec_file_suffix}_complete_result.csv",
         mime="text/csv",
         use_container_width=True,
     )
     st.download_button(
         label="Download Subject Analysis CSV",
         data=export_subject_csv_bytes(analysis_df),
-        file_name=f"{base_stem}_subject_analysis.csv",
+        file_name=f"{base_stem}{sec_file_suffix}_subject_analysis.csv",
         mime="text/csv",
         use_container_width=True,
     )
     st.download_button(
         label="Download Subject Top 5 CSV",
         data=export_subject_toppers_csv_bytes(subject_toppers_df),
-        file_name=f"{base_stem}_subject_top5_students.csv",
+        file_name=f"{base_stem}{sec_file_suffix}_subject_top5_students.csv",
         mime="text/csv",
         use_container_width=True,
     )
     st.download_button(
         label="Download Printable Report (HTML/PDF)",
-        data=generate_printable_html(df, analysis_df, subject_toppers_df, metadata).encode("utf-8"),
-        file_name=f"{base_stem}_academic_report.html",
+        data=generate_printable_html(
+            df, analysis_df, subject_toppers_df, metadata, active_section_note
+        ).encode("utf-8"),
+        file_name=f"{base_stem}{sec_file_suffix}_academic_report.html",
         mime="text/html",
         use_container_width=True,
         help="Open in your browser and press Ctrl+P / Cmd+P to save as a formatted PDF.",
@@ -727,6 +933,11 @@ with st.sidebar:
 # ---------------------------------------------------------------------------
 # Header Metadata Banner
 # ---------------------------------------------------------------------------
+banner_sec_html = (
+    f" &middot; <b>Section Filter: {html.escape(active_section_note)}</b> ({len(df)} of {len(full_df)})"
+    if active_section_note
+    else (f" &middot; Sections Loaded: {len(available_sections)}" if has_sections else "")
+)
 st.markdown(
     f"""
     <div class="report-banner">
@@ -736,7 +947,7 @@ st.markdown(
         School Code: {html.escape(metadata['school_code'])} &middot;
         Region: {html.escape(metadata['region'])} &middot;
         Exam Date: {html.escape(metadata['exam_date'])} &middot;
-        Total Candidates: {len(df)}
+        Candidates: {len(df)}{banner_sec_html}
       </div>
     </div>
     """,
@@ -979,9 +1190,11 @@ with tab_overview:
                         f"{s_code} · {int(sub_r['Students_Appeared'])} appeared · "
                         f"Sum {int(sub_r['Total_Marks_Sum']):,} · QI {float(sub_r['Quality_Index']):.2f}"
                     )
-                    card_tbl = s_slice[
-                        ["Subject_Rank", "Roll_No", "Candidate_Name", "Marks", "Grade", "Overall_Result"]
-                    ].rename(
+                    card_cols = ["Subject_Rank", "Roll_No", "Candidate_Name"]
+                    if "Section" in s_slice.columns:
+                        card_cols.append("Section")
+                    card_cols += ["Marks", "Grade", "Overall_Result"]
+                    card_tbl = s_slice[card_cols].rename(
                         columns={
                             "Subject_Rank": "Rank",
                             "Roll_No": "Roll No",
@@ -1050,23 +1263,26 @@ with tab_overview:
 
     # Top 5 Performers
     st.subheader("Top 5 Performers (Best-5 Rankers)")
+    top5_cols = [
+        "Rank_Best5",
+        "Roll_No",
+        "Candidate_Name",
+    ]
+    if has_sections:
+        top5_cols.append("Section")
+    top5_cols += [
+        "Gender",
+        "Best5_Total_500",
+        "Best5_Percentage",
+        "Total_Marks_All",
+        "Percentage_All",
+        "Result",
+    ]
     top5_df = (
         passed_df.sort_values(
             by=["Best5_Percentage", "Total_Marks_All"], ascending=[False, False]
         )
-        .head(5)[
-            [
-                "Rank_Best5",
-                "Roll_No",
-                "Candidate_Name",
-                "Gender",
-                "Best5_Total_500",
-                "Best5_Percentage",
-                "Total_Marks_All",
-                "Percentage_All",
-                "Result",
-            ]
-        ]
+        .head(5)[top5_cols]
         .reset_index(drop=True)
     )
     st.dataframe(top5_df, use_container_width=True, hide_index=True)
@@ -1289,6 +1505,8 @@ with tab_custom:
         st.session_state.preset_col = "Grade (A1–E)"
         st.session_state.preset_metric = "Candidate Count (N)"
         st.session_state.preset_distinction = "All Marks (0–100)"
+        st.session_state.pop("tab3_section_multiselect", None)
+        st.session_state.pop("_tab3_section_opts", None)
 
     # Filter Controls
     with st.expander("Cohort Filter Controls", expanded=True):
@@ -1317,6 +1535,29 @@ with tab_custom:
         )
         f_sub_marks = fc8.slider("Subject Marks Range", 0, 100, (0, 100), step=1)
 
+        f_sections_custom: List[str] = []
+        if has_sections:
+            tab3_sections = sorted(
+                df["Section"].dropna().unique().tolist(),
+                key=lambda s: (1 if s == "Unassigned" else 0, s.lower()),
+            )
+            tab3_sec_sig = tuple(tab3_sections)
+            if (
+                "tab3_section_multiselect" not in st.session_state
+                or st.session_state.get("_tab3_section_opts") != tab3_sec_sig
+            ):
+                st.session_state["tab3_section_multiselect"] = list(tab3_sections)
+                st.session_state["_tab3_section_opts"] = tab3_sec_sig
+            else:
+                st.session_state["tab3_section_multiselect"] = [
+                    s for s in st.session_state["tab3_section_multiselect"] if s in tab3_sections
+                ]
+            f_sections_custom = st.multiselect(
+                "Filter by Section (one or multiple)",
+                options=tab3_sections,
+                key="tab3_section_multiselect",
+            )
+
     # Apply filters
     mask = pd.Series(True, index=df.index)
     if q_search.strip():
@@ -1329,6 +1570,12 @@ with tab_custom:
         mask &= df["Result"].isin(f_statuses)
     else:
         mask &= False
+
+    if has_sections:
+        if f_sections_custom:
+            mask &= df["Section"].isin(f_sections_custom)
+        else:
+            mask &= False
 
     if f_gender != "ALL":
         mask &= df["Gender"] == f_gender
@@ -1369,15 +1616,18 @@ with tab_custom:
 
     # Pivot Matrix Builder
     st.markdown("#### Live Cross-Tabulation & Pivot Matrix")
-    row_opts = [
-        "Subject",
+    row_opts = (
+        ["Subject", "Section"] if has_sections else ["Subject"]
+    ) + [
         "Performance Band",
         "Gender",
         "Result Status",
         "Internal Grade (GR1)",
         "Subject Combination",
     ]
-    col_opts = ["None", "Grade (A1–E)", "Performance Band", "Gender", "Result Status"]
+    col_opts = (
+        ["None", "Section"] if has_sections else ["None"]
+    ) + ["Grade (A1–E)", "Performance Band", "Gender", "Result Status"]
     metric_opts = [
         "Candidate Count (N)",
         "Mean Score / %",
@@ -1442,6 +1692,7 @@ with tab_custom:
                     long_rows.append(
                         {
                             "RowKey": f"{code} — {sub_name.replace('_', ' ')}",
+                            "Section": r["Section"] if "Section" in source_df.columns else "Unassigned",
                             "Grade (A1–E)": r[g_col] if r[g_col] in STANDARD_GRADES else "Other",
                             "Performance Band": r["Performance_Band"],
                             "Gender": "Male (M)" if r["Gender"] == "M" else "Female (F)",
@@ -1454,6 +1705,7 @@ with tab_custom:
             work = pd.DataFrame(long_rows)
         else:
             dim_map = {
+                "Section": "Section",
                 "Performance Band": "Performance_Band",
                 "Gender": "Gender",
                 "Result Status": "Result",
@@ -1472,9 +1724,15 @@ with tab_custom:
                 else source_df[src_col].replace("", "None").fillna("None")
             )
             score_series = source_df["Best5_Percentage"].astype(float)
+            section_series = (
+                source_df["Section"].replace("", "Unassigned").fillna("Unassigned")
+                if "Section" in source_df.columns
+                else pd.Series("Unassigned", index=source_df.index)
+            )
             work = pd.DataFrame(
                 {
                     "RowKey": row_key_series,
+                    "Section": section_series,
                     "Performance Band": source_df["Performance_Band"],
                     "Gender": gender_series,
                     "Result Status": source_df["Result"],
@@ -1649,7 +1907,11 @@ with tab_custom:
 with tab_students:
     st.subheader("Individual Student Scorecard")
     student_labels = [
-        f"{r['Roll_No']} — {r['Candidate_Name']} ({r['Result']})"
+        (
+            f"{r['Roll_No']} — {r['Candidate_Name']} [Sec {r['Section']}] ({r['Result']})"
+            if has_sections
+            else f"{r['Roll_No']} — {r['Candidate_Name']} ({r['Result']})"
+        )
         for _, r in df.iterrows()
     ]
     selected_label = st.selectbox(
@@ -1665,7 +1927,8 @@ with tab_students:
     b5_tot_disp = f"{int(student_row['Best5_Total_500'])} / 500" if pd.notna(student_row["Best5_Total_500"]) else "—"
     all_tot_disp = f"{int(student_row['Total_Marks_All'])}" if pd.notna(student_row["Total_Marks_All"]) else "—"
 
-    sc1.metric("School Rank (Best-5)", rank_disp, f"Result: {student_row['Result']}", delta_color="off")
+    sec_delta = f" · Sec {student_row['Section']}" if has_sections else ""
+    sc1.metric("School Rank (Best-5)", rank_disp, f"Result: {student_row['Result']}{sec_delta}", delta_color="off")
     sc2.metric("Best-5 Percentage", b5_pct_disp, student_row["Performance_Band"], delta_color="off")
     sc3.metric("Best-5 Total", b5_tot_disp, f"Gender: {student_row['Gender']}", delta_color="off")
     sc4.metric(
@@ -1747,6 +2010,18 @@ with tab_students:
         f"{c} — {subject_display_name(c)}" for c in sorted_codes
     ]
 
+    reg_status_sig = tuple(reg_all_statuses)
+    if (
+        "reg_status_multiselect" not in st.session_state
+        or st.session_state.get("_reg_status_opts") != reg_status_sig
+    ):
+        st.session_state["reg_status_multiselect"] = list(reg_all_statuses)
+        st.session_state["_reg_status_opts"] = reg_status_sig
+    else:
+        st.session_state["reg_status_multiselect"] = [
+            s for s in st.session_state["reg_status_multiselect"] if s in reg_all_statuses
+        ]
+
     rf1, rf2, rf3, rf4 = st.columns([1.2, 1.4, 1.3, 1.1])
     reg_search = rf1.text_input(
         "Search Name or Roll No",
@@ -1756,7 +2031,6 @@ with tab_students:
     reg_statuses = rf2.multiselect(
         "Student Status (one or multiple)",
         options=reg_all_statuses,
-        default=reg_all_statuses,
         key="reg_status_multiselect",
     )
     reg_sub_label = rf3.selectbox(
@@ -1772,6 +2046,29 @@ with tab_students:
         help="Filter by grade in the selected subject (or across any subject when All Subjects is active).",
     )
 
+    reg_sections: List[str] = []
+    if has_sections:
+        reg_sec_opts = sorted(
+            df["Section"].dropna().unique().tolist(),
+            key=lambda s: (1 if s == "Unassigned" else 0, s.lower()),
+        )
+        reg_sec_sig = tuple(reg_sec_opts)
+        if (
+            "reg_section_multiselect" not in st.session_state
+            or st.session_state.get("_reg_section_opts") != reg_sec_sig
+        ):
+            st.session_state["reg_section_multiselect"] = list(reg_sec_opts)
+            st.session_state["_reg_section_opts"] = reg_sec_sig
+        else:
+            st.session_state["reg_section_multiselect"] = [
+                s for s in st.session_state["reg_section_multiselect"] if s in reg_sec_opts
+            ]
+        reg_sections = st.multiselect(
+            "Filter Register by Section (one or multiple)",
+            options=reg_sec_opts,
+            key="reg_section_multiselect",
+        )
+
     reg_df = df.copy()
     if reg_search.strip():
         q = reg_search.strip().lower()
@@ -1785,11 +2082,19 @@ with tab_students:
     else:
         reg_df = reg_df.iloc[0:0]
 
+    if has_sections:
+        if reg_sections:
+            reg_df = reg_df[reg_df["Section"].isin(reg_sections)]
+        else:
+            reg_df = reg_df.iloc[0:0]
+
     reg_sub_code = (
         reg_sub_label.split(" — ")[0]
         if reg_sub_label != "All Subjects (Full Register)"
         else "ALL"
     )
+
+    sec_col_list = ["Section"] if has_sections else []
 
     if reg_sub_code != "ALL":
         sub_prefix = f"{reg_sub_code}_{CBSE_SUBJECT_CODES.get(reg_sub_code, f'Subject_{reg_sub_code}')}"
@@ -1805,7 +2110,7 @@ with tab_students:
         sm1, sm2, sm3, sm4, sm5 = st.columns(5)
         sm1.metric("Enrolled (Filtered)", f"{len(reg_df)}")
         sm2.metric(
-            "Subject Mean",
+            "Subject Mean / QI",
             f"{round(float(scored_marks.mean()), 2)}" if len(scored_marks) else "—",
         )
         sm3.metric(
@@ -1838,34 +2143,38 @@ with tab_students:
             for c in sorted_codes
             if c != reg_sub_code
         ]
-        display_cols = [
-            "Rank_Best5",
-            "Roll_No",
-            "Candidate_Name",
-            "Gender",
-            "Result",
-            m_col,
-            g_col,
-            "Best5_Percentage",
-            "Best5_Total_500",
-            "Total_Marks_All",
-            "Performance_Band",
-        ] + other_mark_cols
+        display_cols = (
+            ["Rank_Best5", "Roll_No", "Candidate_Name"]
+            + sec_col_list
+            + [
+                "Gender",
+                "Result",
+                m_col,
+                g_col,
+                "Best5_Percentage",
+                "Best5_Total_500",
+                "Total_Marks_All",
+                "Performance_Band",
+            ]
+            + other_mark_cols
+        )
     else:
         if reg_grades:
             grade_cols = [c for c in reg_df.columns if c.endswith("_Grade")]
             reg_df = reg_df[reg_df[grade_cols].isin(reg_grades).any(axis=1)]
-        display_cols = [
-            "Rank_Best5",
-            "Roll_No",
-            "Candidate_Name",
-            "Gender",
-            "Result",
-            "Best5_Percentage",
-            "Best5_Total_500",
-            "Total_Marks_All",
-            "Performance_Band",
-        ] + [f"{c}_{CBSE_SUBJECT_CODES.get(c, f'Subject_{c}')}_Marks" for c in sorted_codes]
+        display_cols = (
+            ["Rank_Best5", "Roll_No", "Candidate_Name"]
+            + sec_col_list
+            + [
+                "Gender",
+                "Result",
+                "Best5_Percentage",
+                "Best5_Total_500",
+                "Total_Marks_All",
+                "Performance_Band",
+            ]
+            + [f"{c}_{CBSE_SUBJECT_CODES.get(c, f'Subject_{c}')}_Marks" for c in sorted_codes]
+        )
 
     st.caption(f"Showing **{len(reg_df)}** of **{len(df)}** candidates.")
     if reg_df.empty:

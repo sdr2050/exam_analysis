@@ -58,6 +58,7 @@ export interface CandidateRecord {
   best5Percentage: number | null;
   rankBest5: number | null;
   performanceBand: string;
+  section?: string;
 }
 
 export interface SubjectTopper {
@@ -132,11 +133,15 @@ export interface ParsedGazette {
   sortedSubjectCodes: string[];
   subjectStats: SubjectStat[];
   summary: OverallSummary;
+  sections: string[];
+  sectionFileName?: string;
+  sectionMatchedCount?: number;
 }
 
 export interface CustomFilterState {
   searchQuery: string;
   results: string[]; // empty array means ALL statuses
+  sections: string[]; // empty array means ALL sections
   gender: string;
   performanceBand: string;
   subjectCode: string;
@@ -150,6 +155,7 @@ export interface CustomFilterState {
 
 export type PivotRowDimension =
   | "subject"
+  | "section"
   | "performanceBand"
   | "result"
   | "gender"
@@ -158,6 +164,7 @@ export type PivotRowDimension =
 
 export type PivotColDimension =
   | "none"
+  | "section"
   | "grade"
   | "performanceBand"
   | "result"

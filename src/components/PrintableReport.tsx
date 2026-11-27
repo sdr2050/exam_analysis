@@ -3,10 +3,15 @@ import { ParsedGazette, STANDARD_GRADES } from "../types/exam";
 
 interface PrintableReportProps {
   gazette: ParsedGazette;
+  selectedSections?: string[];
 }
 
-export const PrintableReport: React.FC<PrintableReportProps> = ({ gazette }) => {
+export const PrintableReport: React.FC<PrintableReportProps> = ({
+  gazette,
+  selectedSections = [],
+}) => {
   const { summary, subjectStats } = gazette;
+  const hasSections = gazette.sections.length > 0;
 
   return (
     <div className="print-only p-4 font-sans text-slate-900 bg-white">
@@ -23,6 +28,7 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({ gazette }) => 
         </p>
         <p className="text-xs text-slate-600 font-mono mt-0.5">
           Region: {gazette.region} · Examination Date: {gazette.examDate} · Gazette: {gazette.fileName}
+          {selectedSections.length > 0 ? ` · Section Filter: ${selectedSections.join(", ")}` : ""}
         </p>
       </div>
 
@@ -150,6 +156,7 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({ gazette }) => 
               <th className="p-2">Rank</th>
               <th className="p-2">Roll No</th>
               <th className="p-2">Candidate Name</th>
+              {hasSections && <th className="p-2 text-center">Sec</th>}
               <th className="p-2 text-center">Sex</th>
               <th className="p-2 text-right">Best-5 / 500</th>
               <th className="p-2 text-right">Best-5 %</th>
@@ -163,6 +170,11 @@ export const PrintableReport: React.FC<PrintableReportProps> = ({ gazette }) => 
                 <td className="p-2 font-bold">#{student.rankBest5}</td>
                 <td className="p-2">{student.rollNo}</td>
                 <td className="p-2 font-sans font-semibold">{student.candidateName}</td>
+                {hasSections && (
+                  <td className="p-2 text-center font-semibold">
+                    {student.section || "Unassigned"}
+                  </td>
+                )}
                 <td className="p-2 text-center">{student.gender}</td>
                 <td className="p-2 text-right font-bold">{student.best5Total}</td>
                 <td className="p-2 text-right font-bold">{student.best5Percentage}%</td>

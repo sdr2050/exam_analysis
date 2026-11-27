@@ -60,8 +60,16 @@ export const StudentScorecardDrawer: React.FC<StudentScorecardDrawerProps> = ({
               {candidate.candidateName}
             </h2>
 
-            <div className="flex items-center gap-2 text-xs text-slate-500 font-mono mt-1">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 font-mono mt-1">
               <span>Sex: {candidate.gender === "M" ? "Male" : "Female"}</span>
+              {candidate.section && (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-semibold text-emerald-700">
+                    Section: {candidate.section}
+                  </span>
+                </>
+              )}
               <span aria-hidden="true">·</span>
               <span>Sch: {candidate.schoolCode}</span>
               <span aria-hidden="true">·</span>

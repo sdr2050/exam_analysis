@@ -35,6 +35,7 @@ export const StudentDirectory: React.FC<StudentDirectoryProps> = ({
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>(initialStatuses || []);
   const [selectedSubject, setSelectedSubject] = useState<string>(initialSubjectCode || "ALL");
   const [selectedGrade, setSelectedGrade] = useState<string>("ALL");
+  const [selectedSection, setSelectedSection] = useState<string>("ALL");
   const [sortField, setSortField] = useState<DirectorySort>(
     initialSubjectCode && initialSubjectCode !== "ALL" ? "subjectMarks" : "rank"
   );
@@ -85,11 +86,24 @@ export const StudentDirectory: React.FC<StudentDirectoryProps> = ({
     }
   };
 
+  const availableSections = useMemo(() => {
+    if (gazette.sections.length === 0) return [];
+    const present = Array.from(
+      new Set(gazette.candidates.map((c) => c.section || "Unassigned"))
+    );
+    return present.sort((a, b) => {
+      if (a === "Unassigned") return 1;
+      if (b === "Unassigned") return -1;
+      return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
+    });
+  }, [gazette.candidates, gazette.sections]);
+
   const resetFilters = () => {
     setSearch("");
     setSelectedStatuses([]);
     setSelectedSubject("ALL");
     setSelectedGrade("ALL");
+    setSelectedSection("ALL");
     setSortField("rank");
     setSortAsc(true);
   };
@@ -98,7 +112,8 @@ export const StudentDirectory: React.FC<StudentDirectoryProps> = ({
     search.trim() !== "" ||
     selectedStatuses.length > 0 ||
     selectedSubject !== "ALL" ||
-    selectedGrade !== "ALL";
+    selectedGrade !== "ALL" ||
+    selectedSection !== "ALL";
 
   const handleSort = (field: DirectorySort) => {
     if (sortField === field) {
@@ -120,6 +135,9 @@ export const StudentDirectory: React.FC<StudentDirectoryProps> = ({
       if (selectedStatuses.length > 0 && !selectedStatuses.includes(c.result || "Unknown")) {
         return false;
       }
+      if (selectedSection !== "ALL" && (c.section || "Unassigned") !== selectedSection) {
+        return false;
+      }
       if (selectedSubject !== "ALL") {
         const sub = c.subjects[selectedSubject];
         if (!sub) return false;
@@ -132,7 +150,7 @@ export const StudentDirectory: React.FC<StudentDirectoryProps> = ({
       }
       return true;
     });
-  }, [gazette.candidates, search, selectedStatuses, selectedSubject, selectedGrade]);
+  }, [gazette.candidates, search, selectedStatuses, selectedSection, selectedSubject, selectedGrade]);
 
   const sorted = useMemo(() => {
     return [...filtered].sort((a, b) => {
@@ -265,6 +283,23 @@ export const StudentDirectory: React.FC<StudentDirectoryProps> = ({
               <option value="AB">AB (Absent)</option>
               <option value="R.L.">R.L. (Pending)</option>
             </select>
+
+            {/* Section Filter */}
+            {availableSections.length > 0 && (
+              <select
+                value={selectedSection}
+                onChange={(e) => setSelectedSection(e.target.value)}
+                aria-label="Filter by Section"
+                className="px-2.5 py-1.5 text-xs bg-emerald-50/60 border border-emerald-200 rounded-md focus:bg-white focus:border-emerald-600 outline-hidden font-mono text-emerald-900"
+              >
+                <option value="ALL">All Sections</option>
+                {availableSections.map((sec) => (
+                  <option key={sec} value={sec}>
+                    {sec === "Unassigned" ? "Unassigned" : `Section ${sec}`}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
           {/* Count, Reset & Export */}
@@ -442,6 +477,9 @@ export const StudentDirectory: React.FC<StudentDirectoryProps> = ({
                       Candidate Name <ArrowUpDown className="w-3 h-3 text-slate-400" />
                     </div>
                   </th>
+                  {availableSections.length > 0 && (
+                    <th className="py-3 px-2 text-center w-16">Section</th>
+                  )}
                   <th className="py-3 px-2 text-center w-10">Sex</th>
                   <th className="py-3 px-2 text-center w-16">Result</th>
 
@@ -515,6 +553,11 @@ export const StudentDirectory: React.FC<StudentDirectoryProps> = ({
                       <td className="py-2.5 px-3 font-semibold text-slate-900 group-hover:text-blue-700 whitespace-nowrap">
                         {c.candidateName}
                       </td>
+                      {availableSections.length > 0 && (
+                        <td className="py-2.5 px-2 text-center font-mono font-semibold text-emerald-800">
+                          {c.section || "Unassigned"}
+                        </td>
+                      )}
                       <td className="py-2.5 px-2 text-center font-mono text-slate-600">
                         {c.gender}
                       </td>
