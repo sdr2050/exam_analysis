@@ -1217,12 +1217,15 @@ with tab_custom:
         st.session_state.preset_row = "Subject"
         st.session_state.preset_col = "Grade (A1–E)"
         st.session_state.preset_metric = "Candidate Count (N)"
+        st.session_state.preset_distinction = "All Marks (0–100)"
     else:
         valid_saved = [s for s in st.session_state.preset_statuses if s in all_result_statuses]
         if not valid_saved and all_result_statuses:
             st.session_state.preset_statuses = list(all_result_statuses)
         else:
             st.session_state.preset_statuses = valid_saved
+        if "preset_distinction" not in st.session_state:
+            st.session_state.preset_distinction = "All Marks (0–100)"
 
     if "custom_status_multiselect" not in st.session_state:
         st.session_state["custom_status_multiselect"] = list(st.session_state.preset_statuses)
@@ -1237,9 +1240,10 @@ with tab_custom:
         st.session_state["custom_status_multiselect"] = list(st.session_state.preset_statuses)
         st.session_state.preset_min_b5 = 75.0
         st.session_state.preset_max_b5 = 100.0
-        st.session_state.preset_row = "Performance Band"
-        st.session_state.preset_col = "Gender"
+        st.session_state.preset_row = "Subject"
+        st.session_state.preset_col = "Grade (A1–E)"
         st.session_state.preset_metric = "Candidate Count (N)"
+        st.session_state.preset_distinction = "Distinction (75–100 marks)"
     if p2.button("Borderline (<55%)", use_container_width=True):
         st.session_state.preset_statuses = list(all_result_statuses)
         st.session_state["custom_status_multiselect"] = list(all_result_statuses)
@@ -1248,6 +1252,7 @@ with tab_custom:
         st.session_state.preset_row = "Subject"
         st.session_state.preset_col = "Grade (A1–E)"
         st.session_state.preset_metric = "Candidate Count (N)"
+        st.session_state.preset_distinction = "All Marks (0–100)"
     if p3.button("Subject × Grade", use_container_width=True):
         st.session_state.preset_statuses = list(all_result_statuses)
         st.session_state["custom_status_multiselect"] = list(all_result_statuses)
@@ -1256,6 +1261,7 @@ with tab_custom:
         st.session_state.preset_row = "Subject"
         st.session_state.preset_col = "Grade (A1–E)"
         st.session_state.preset_metric = "Candidate Count (N)"
+        st.session_state.preset_distinction = "All Marks (0–100)"
     if p4.button("Gender × Band", use_container_width=True):
         st.session_state.preset_statuses = list(all_result_statuses)
         st.session_state["custom_status_multiselect"] = list(all_result_statuses)
@@ -1264,6 +1270,7 @@ with tab_custom:
         st.session_state.preset_row = "Gender"
         st.session_state.preset_col = "Performance Band"
         st.session_state.preset_metric = "Candidate Count (N)"
+        st.session_state.preset_distinction = "All Marks (0–100)"
     if p5.button("COMP / R.L. Audit", use_container_width=True):
         st.session_state.preset_statuses = non_pass_statuses or list(all_result_statuses)
         st.session_state["custom_status_multiselect"] = list(st.session_state.preset_statuses)
@@ -1272,6 +1279,7 @@ with tab_custom:
         st.session_state.preset_row = "Result Status"
         st.session_state.preset_col = "Gender"
         st.session_state.preset_metric = "Candidate Count (N)"
+        st.session_state.preset_distinction = "All Marks (0–100)"
     if p6.button("Reset Filters", use_container_width=True):
         st.session_state.preset_statuses = list(all_result_statuses)
         st.session_state["custom_status_multiselect"] = list(all_result_statuses)
@@ -1280,6 +1288,7 @@ with tab_custom:
         st.session_state.preset_row = "Subject"
         st.session_state.preset_col = "Grade (A1–E)"
         st.session_state.preset_metric = "Candidate Count (N)"
+        st.session_state.preset_distinction = "All Marks (0–100)"
 
     # Filter Controls
     with st.expander("Cohort Filter Controls", expanded=True):
@@ -1377,8 +1386,13 @@ with tab_custom:
         "Lowest Score / %",
         "Pass Rate %",
     ]
+    distinction_opts = [
+        "All Marks (0–100)",
+        "Distinction (75–100 marks)",
+        "Below Distinction (<75 marks)",
+    ]
 
-    pc1, pc2, pc3 = st.columns(3)
+    pc1, pc2, pc3, pc4 = st.columns(4)
     row_dim = pc1.selectbox(
         "Row Dimension",
         row_opts,
@@ -1394,9 +1408,23 @@ with tab_custom:
         metric_opts,
         index=metric_opts.index(st.session_state.preset_metric) if st.session_state.preset_metric in metric_opts else 0,
     )
+    distinction_choice = pc4.selectbox(
+        "Distinction Filter (75–100)",
+        distinction_opts,
+        index=(
+            distinction_opts.index(st.session_state.preset_distinction)
+            if st.session_state.preset_distinction in distinction_opts
+            else 0
+        ),
+        help="Filter matrix entries by Distinction criterion (75 to 100 marks inclusive).",
+    )
 
     def build_pivot_dataframe(
-        source_df: pd.DataFrame, r_dim: str, c_dim: str, met: str
+        source_df: pd.DataFrame,
+        r_dim: str,
+        c_dim: str,
+        met: str,
+        dist_filter: str = "All Marks (0–100)",
     ) -> pd.DataFrame:
         if source_df.empty:
             return pd.DataFrame()
@@ -1410,6 +1438,7 @@ with tab_custom:
                 g_col = f"{code}_{sub_name}_Grade"
                 sub_slice = source_df[source_df[m_col].notna() | (source_df[g_col] != "")]
                 for _, r in sub_slice.iterrows():
+                    score_val = float(r[m_col]) if pd.notna(r[m_col]) else np.nan
                     long_rows.append(
                         {
                             "RowKey": f"{code} — {sub_name.replace('_', ' ')}",
@@ -1417,7 +1446,8 @@ with tab_custom:
                             "Performance Band": r["Performance_Band"],
                             "Gender": "Male (M)" if r["Gender"] == "M" else "Female (F)",
                             "Result Status": r["Result"],
-                            "Score": float(r[m_col]) if pd.notna(r[m_col]) else np.nan,
+                            "Score": score_val,
+                            "FilterScore": score_val,
                             "IsPass": 1.0 if r[g_col] != "E" and r["Result"] == "PASS" else 0.0,
                         }
                     )
@@ -1441,13 +1471,15 @@ with tab_custom:
                 if r_dim == "Gender"
                 else source_df[src_col].replace("", "None").fillna("None")
             )
+            score_series = source_df["Best5_Percentage"].astype(float)
             work = pd.DataFrame(
                 {
                     "RowKey": row_key_series,
                     "Performance Band": source_df["Performance_Band"],
                     "Gender": gender_series,
                     "Result Status": source_df["Result"],
-                    "Score": source_df["Best5_Percentage"].astype(float),
+                    "Score": score_series,
+                    "FilterScore": score_series,
                     "IsPass": (source_df["Result"] == "PASS").astype(float),
                 }
             )
@@ -1459,15 +1491,31 @@ with tab_custom:
                     for gc in grade_cols:
                         gv = r[gc]
                         if gv in STANDARD_GRADES:
+                            mc = gc[:-6] + "_Marks"
+                            sub_mark = (
+                                float(r[mc])
+                                if mc in source_df.columns and pd.notna(r[mc])
+                                else np.nan
+                            )
                             exploded.append(
                                 {
                                     "RowKey": work.loc[idx_r, "RowKey"],
                                     "Grade (A1–E)": gv,
                                     "Score": work.loc[idx_r, "Score"],
+                                    "FilterScore": sub_mark,
                                     "IsPass": work.loc[idx_r, "IsPass"],
                                 }
                             )
                 work = pd.DataFrame(exploded)
+
+        if work.empty:
+            return pd.DataFrame()
+
+        # Apply Distinction filter (75 to 100 marks inclusive)
+        if dist_filter == "Distinction (75–100 marks)":
+            work = work[work["FilterScore"].between(75.0, 100.0, inclusive="both")]
+        elif dist_filter == "Below Distinction (<75 marks)":
+            work = work[work["FilterScore"].notna() & (work["FilterScore"] < 75.0)]
 
         if work.empty:
             return pd.DataFrame()
@@ -1518,7 +1566,19 @@ with tab_custom:
         piv.columns.name = None
         return piv
 
-    pivot_df = build_pivot_dataframe(filtered_df, row_dim, col_dim, metric_choice)
+    if distinction_choice != "All Marks (0–100)":
+        scope_note = (
+            "individual subject marks"
+            if row_dim == "Subject" or col_dim == "Grade (A1–E)"
+            else "candidate Best-5 percentage"
+        )
+        st.caption(
+            f"Active Matrix Filter: **{distinction_choice}** (criterion: 75–100 marks inclusive), applied to {scope_note}."
+        )
+
+    pivot_df = build_pivot_dataframe(
+        filtered_df, row_dim, col_dim, metric_choice, distinction_choice
+    )
 
     if pivot_df.empty:
         st.info("No data available for the current filter and pivot selection.")
@@ -1561,11 +1621,16 @@ with tab_custom:
         )
         st.plotly_chart(fig_piv, use_container_width=True)
 
+        dist_suffix = (
+            "_distinction_75_100"
+            if distinction_choice == "Distinction (75–100 marks)"
+            else ("_below_distinction" if distinction_choice == "Below Distinction (<75 marks)" else "")
+        )
         dl1, dl2 = st.columns(2)
         dl1.download_button(
             "Download Pivot Matrix CSV",
             data=pivot_df.to_csv().encode("utf-8"),
-            file_name=f"{base_stem}_pivot_analysis.csv",
+            file_name=f"{base_stem}_pivot{dist_suffix}_analysis.csv",
             mime="text/csv",
             use_container_width=True,
         )

@@ -6,10 +6,24 @@ import {
   PivotRowDimension,
   PivotColDimension,
   PivotMetric,
+  PivotDistinctionFilter,
   PivotMatrixResult,
   PivotMatrixRow,
   PivotMatrixCell,
 } from "../types/exam";
+
+/**
+ * Checks whether a numeric mark/score satisfies the active Distinction filter (75 to 100 marks).
+ */
+function matchesDistinctionFilter(
+  score: number | null | undefined,
+  filter: PivotDistinctionFilter
+): boolean {
+  if (filter === "all") return true;
+  if (score === null || score === undefined || isNaN(score)) return false;
+  if (filter === "distinction") return score >= 75 && score <= 100;
+  return score < 75;
+}
 
 /**
  * Computes descriptive statistics for a list of numbers.
@@ -38,38 +52,22 @@ function computeStats(numbers: number[]): {
 }
 
 /**
- * Extracts candidate values for a specific dimension.
- */
-function getCandidateDimensionValue(candidate: CandidateRecord, dim: PivotRowDimension | PivotColDimension): string {
-  switch (dim) {
-    case "gender":
-      return candidate.gender === "M" ? "Male (M)" : candidate.gender === "F" ? "Female (F)" : candidate.gender;
-    case "result":
-      return candidate.result || "N/A";
-    case "performanceBand":
-      return candidate.performanceBand || "Unknown";
-    case "internalGrade1":
-      return candidate.internalGrade1 || "None";
-    case "subjectCombo": {
-      // Group by distinct stream / subject combination
-      const codes = Object.keys(candidate.subjects).sort();
-      return codes.map((c) => CBSE_SUBJECT_CODES[c] || c).join(", ");
-    }
-    default:
-      return "All";
-  }
-}
-
-/**
- * Builds a dynamic cross-tabulation pivot matrix based on row, column, and metric configuration.
+ * Builds a dynamic cross-tabulation pivot matrix based on row, column, metric, and distinction filter configuration.
  */
 export function buildPivotMatrix(
   candidates: CandidateRecord[],
   subjectStats: SubjectStat[],
   rowDimension: PivotRowDimension,
   colDimension: PivotColDimension,
-  metric: PivotMetric
+  metric: PivotMetric,
+  distinctionFilter: PivotDistinctionFilter = "all"
 ): PivotMatrixResult {
+  // For candidate-level pivots (non-subject rows and non-grade columns), filter candidates by Best-5 score (75–100)
+  const effectiveCandidates =
+    rowDimension !== "subject" && colDimension !== "grade" && distinctionFilter !== "all"
+      ? candidates.filter((c) => matchesDistinctionFilter(c.best5Percentage, distinctionFilter))
+      : candidates;
+
   // Determine Column Headers
   let colHeaders: string[] = [];
   if (colDimension === "none") {
@@ -85,10 +83,16 @@ export function buildPivotMatrix(
       "Below 50%",
     ];
   } else if (colDimension === "gender") {
-    const genders = Array.from(new Set(candidates.map((c) => (c.gender === "M" ? "Male (M)" : c.gender === "F" ? "Female (F)" : c.gender))));
+    const genders = Array.from(
+      new Set(
+        effectiveCandidates.map((c) =>
+          c.gender === "M" ? "Male (M)" : c.gender === "F" ? "Female (F)" : c.gender
+        )
+      )
+    );
     colHeaders = genders.sort();
   } else if (colDimension === "result") {
-    const results = Array.from(new Set(candidates.map((c) => c.result || "Unknown")));
+    const results = Array.from(new Set(effectiveCandidates.map((c) => c.result || "Unknown")));
     colHeaders = results.sort();
   }
 
@@ -109,17 +113,25 @@ export function buildPivotMatrix(
     ];
     rowLabels = bands.map((b) => ({ key: b, label: b }));
   } else if (rowDimension === "gender") {
-    const genders = Array.from(new Set(candidates.map((c) => (c.gender === "M" ? "Male (M)" : c.gender === "F" ? "Female (F)" : c.gender))));
+    const genders = Array.from(
+      new Set(
+        effectiveCandidates.map((c) =>
+          c.gender === "M" ? "Male (M)" : c.gender === "F" ? "Female (F)" : c.gender
+        )
+      )
+    );
     rowLabels = genders.sort().map((g) => ({ key: g, label: g }));
   } else if (rowDimension === "result") {
-    const results = Array.from(new Set(candidates.map((c) => c.result || "Unknown")));
+    const results = Array.from(new Set(effectiveCandidates.map((c) => c.result || "Unknown")));
     rowLabels = results.sort().map((r) => ({ key: r, label: r }));
   } else if (rowDimension === "internalGrade1") {
-    const grs = Array.from(new Set(candidates.map((c) => c.internalGrade1).filter(Boolean)));
+    const grs = Array.from(
+      new Set(effectiveCandidates.map((c) => c.internalGrade1).filter(Boolean))
+    );
     rowLabels = grs.sort().map((g) => ({ key: g, label: `Internal Grade ${g}` }));
   } else if (rowDimension === "subjectCombo") {
     const comboMap = new Map<string, number>();
-    for (const c of candidates) {
+    for (const c of effectiveCandidates) {
       const k = c.subjectComboKey || "Standard Core";
       comboMap.set(k, (comboMap.get(k) || 0) + 1);
     }
@@ -179,16 +191,32 @@ export function buildPivotMatrix(
 
     const stats = computeStats(values);
     if (metric === "meanBest5") {
-      return { value: stats.mean, formatted: stats.mean !== null ? `${stats.mean}%` : "—", sampleCount: stats.count };
+      return {
+        value: stats.mean,
+        formatted: stats.mean !== null ? `${stats.mean}%` : "—",
+        sampleCount: stats.count,
+      };
     }
     if (metric === "medianBest5") {
-      return { value: stats.median, formatted: stats.median !== null ? `${stats.median}%` : "—", sampleCount: stats.count };
+      return {
+        value: stats.median,
+        formatted: stats.median !== null ? `${stats.median}%` : "—",
+        sampleCount: stats.count,
+      };
     }
     if (metric === "highestBest5") {
-      return { value: stats.max, formatted: stats.max !== null ? `${stats.max}%` : "—", sampleCount: stats.count };
+      return {
+        value: stats.max,
+        formatted: stats.max !== null ? `${stats.max}%` : "—",
+        sampleCount: stats.count,
+      };
     }
     if (metric === "lowestBest5") {
-      return { value: stats.min, formatted: stats.min !== null ? `${stats.min}%` : "—", sampleCount: stats.count };
+      return {
+        value: stats.min,
+        formatted: stats.min !== null ? `${stats.min}%` : "—",
+        sampleCount: stats.count,
+      };
     }
 
     return { value: stats.mean, formatted: String(stats.mean), sampleCount: stats.count };
@@ -203,19 +231,27 @@ export function buildPivotMatrix(
 
     if (rowDimension === "subject") {
       subCode = rowItem.key;
-      rowCands = candidates.filter((c) => c.subjects[rowItem.key] !== undefined);
+      rowCands = effectiveCandidates.filter((c) => {
+        const sub = c.subjects[rowItem.key];
+        if (!sub) return false;
+        return matchesDistinctionFilter(sub.marks, distinctionFilter);
+      });
     } else if (rowDimension === "performanceBand") {
-      rowCands = candidates.filter((c) => c.performanceBand === rowItem.key);
+      rowCands = effectiveCandidates.filter((c) => c.performanceBand === rowItem.key);
     } else if (rowDimension === "gender") {
-      rowCands = candidates.filter(
-        (c) => (c.gender === "M" ? "Male (M)" : c.gender === "F" ? "Female (F)" : c.gender) === rowItem.key
+      rowCands = effectiveCandidates.filter(
+        (c) =>
+          (c.gender === "M" ? "Male (M)" : c.gender === "F" ? "Female (F)" : c.gender) ===
+          rowItem.key
       );
     } else if (rowDimension === "result") {
-      rowCands = candidates.filter((c) => (c.result || "Unknown") === rowItem.key);
+      rowCands = effectiveCandidates.filter((c) => (c.result || "Unknown") === rowItem.key);
     } else if (rowDimension === "internalGrade1") {
-      rowCands = candidates.filter((c) => c.internalGrade1 === rowItem.key);
+      rowCands = effectiveCandidates.filter((c) => c.internalGrade1 === rowItem.key);
     } else if (rowDimension === "subjectCombo") {
-      rowCands = candidates.filter((c) => (c.subjectComboKey || "Standard Core") === rowItem.key);
+      rowCands = effectiveCandidates.filter(
+        (c) => (c.subjectComboKey || "Standard Core") === rowItem.key
+      );
     }
 
     const values: Record<string, PivotMatrixCell> = {};
@@ -227,20 +263,25 @@ export function buildPivotMatrix(
         let cellCands: CandidateRecord[] = [];
 
         if (colDimension === "grade") {
-          // If row is subject, check this subject's grade
+          // If row is subject, check this subject's grade (rowCands already filtered by distinctionFilter)
           if (subCode) {
             cellCands = rowCands.filter((c) => c.subjects[subCode!]?.grade === colHeader);
           } else {
-            // Count candidates who have at least one subject with this grade
+            // Count candidates who have at least one subject with this grade and matching distinction marks
             cellCands = rowCands.filter((c) =>
-              Object.values(c.subjects).some((s) => s.grade === colHeader)
+              Object.values(c.subjects).some(
+                (s) =>
+                  s.grade === colHeader && matchesDistinctionFilter(s.marks, distinctionFilter)
+              )
             );
           }
         } else if (colDimension === "performanceBand") {
           cellCands = rowCands.filter((c) => c.performanceBand === colHeader);
         } else if (colDimension === "gender") {
           cellCands = rowCands.filter(
-            (c) => (c.gender === "M" ? "Male (M)" : c.gender === "F" ? "Female (F)" : c.gender) === colHeader
+            (c) =>
+              (c.gender === "M" ? "Male (M)" : c.gender === "F" ? "Female (F)" : c.gender) ===
+              colHeader
           );
         } else if (colDimension === "result") {
           cellCands = rowCands.filter((c) => (c.result || "Unknown") === colHeader);
@@ -250,7 +291,16 @@ export function buildPivotMatrix(
       }
     }
 
-    const totalCell = calculateCell(rowCands, subCode);
+    const totalRowCands =
+      rowDimension !== "subject" && colDimension === "grade" && distinctionFilter !== "all"
+        ? rowCands.filter((c) =>
+            Object.values(c.subjects).some((s) =>
+              matchesDistinctionFilter(s.marks, distinctionFilter)
+            )
+          )
+        : rowCands;
+
+    const totalCell = calculateCell(totalRowCands, subCode);
     rows.push({
       label: rowItem.label,
       values,
@@ -258,7 +308,16 @@ export function buildPivotMatrix(
     });
   }
 
-  const overallTotal = calculateCell(candidates);
+  const overallCands =
+    (rowDimension === "subject" || colDimension === "grade") && distinctionFilter !== "all"
+      ? effectiveCandidates.filter((c) =>
+          Object.values(c.subjects).some((s) =>
+            matchesDistinctionFilter(s.marks, distinctionFilter)
+          )
+        )
+      : effectiveCandidates;
+
+  const overallTotal = calculateCell(overallCands);
 
   return {
     rowDimension,

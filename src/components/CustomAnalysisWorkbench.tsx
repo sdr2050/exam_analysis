@@ -18,6 +18,7 @@ import {
   PivotRowDimension,
   PivotColDimension,
   PivotMetric,
+  PivotDistinctionFilter,
   STANDARD_GRADES,
   CBSE_SUBJECT_CODES,
 } from "../types/exam";
@@ -67,6 +68,7 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
   const [rowDimension, setRowDimension] = useState<PivotRowDimension>("subject");
   const [colDimension, setColDimension] = useState<PivotColDimension>("grade");
   const [metric, setMetric] = useState<PivotMetric>("count");
+  const [distinctionFilter, setDistinctionFilter] = useState<PivotDistinctionFilter>("all");
   const [activeTab, setActiveTab] = useState<"pivot" | "cohort">("pivot");
 
   // Filter candidates dynamically based on filters
@@ -174,9 +176,10 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
       gazette.subjectStats,
       rowDimension,
       colDimension,
-      metric
+      metric,
+      distinctionFilter
     );
-  }, [filteredCandidates, gazette.subjectStats, rowDimension, colDimension, metric]);
+  }, [filteredCandidates, gazette.subjectStats, rowDimension, colDimension, metric, distinctionFilter]);
 
   // Max value in matrix for heatmap intensity shading
   const maxCellValue = useMemo(() => {
@@ -192,12 +195,14 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
 
   // Preset handlers
   const applyPreset = (presetName: string) => {
+    setDistinctionFilter("all");
     switch (presetName) {
       case "distinction":
         setFilters({ ...DEFAULT_FILTERS, minBest5: "75" });
-        setRowDimension("performanceBand");
-        setColDimension("none");
+        setRowDimension("subject");
+        setColDimension("grade");
         setMetric("count");
+        setDistinctionFilter("distinction");
         break;
       case "at_risk":
         setFilters({ ...DEFAULT_FILTERS, maxBest5: "55" });
@@ -312,7 +317,10 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
             COMP / R.L. Non-Pass Audit
           </button>
           <button
-            onClick={() => setFilters(DEFAULT_FILTERS)}
+            onClick={() => {
+              setFilters(DEFAULT_FILTERS);
+              setDistinctionFilter("all");
+            }}
             className="px-2.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50 rounded-md transition-colors flex items-center gap-1 ml-auto"
             title="Clear all active filters"
           >
@@ -597,7 +605,7 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
               }`}
             >
               <Table className="w-3.5 h-3.5" />
-              Pivot Matrix & Cross-Tab
+              Live Cross-Tabulation & Pivot Matrix
             </button>
             <button
               onClick={() => setActiveTab("cohort")}
@@ -614,7 +622,12 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
 
           {activeTab === "pivot" && (
             <button
-              onClick={() => exportPivotCSV(pivotMatrix, `${gazette.fileName}_pivot_analysis.csv`)}
+              onClick={() =>
+                exportPivotCSV(
+                  pivotMatrix,
+                  `${gazette.fileName}_pivot${distinctionFilter !== "all" ? `_${distinctionFilter}` : ""}_analysis.csv`
+                )
+              }
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-md transition-colors"
             >
               <Download className="w-3.5 h-3.5 text-slate-500" />
@@ -627,7 +640,7 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
         {activeTab === "pivot" && (
           <div className="p-5 space-y-5">
             {/* Pivot Configuration Selectors */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 p-3.5 rounded-lg border border-slate-200">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 bg-slate-50 p-3.5 rounded-lg border border-slate-200">
               {/* Row Dimension */}
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -684,7 +697,51 @@ export const CustomAnalysisWorkbench: React.FC<CustomAnalysisWorkbenchProps> = (
                   <option value="qualityRate">Quality Rate (A1+A2 %)</option>
                 </select>
               </div>
+
+              {/* Distinction Filter */}
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Distinction Filter (75–100)
+                </label>
+                <select
+                  value={distinctionFilter}
+                  onChange={(e) =>
+                    setDistinctionFilter(e.target.value as PivotDistinctionFilter)
+                  }
+                  className={`w-full px-3 py-1.5 text-xs border rounded-md focus:border-blue-600 outline-hidden font-medium ${
+                    distinctionFilter !== "all"
+                      ? "bg-blue-50 border-blue-400 text-blue-900"
+                      : "bg-white border-slate-200 text-slate-900"
+                  }`}
+                >
+                  <option value="all">All Marks (0–100)</option>
+                  <option value="distinction">Distinction (75–100 marks)</option>
+                  <option value="below_distinction">Below Distinction (&lt;75 marks)</option>
+                </select>
+              </div>
             </div>
+
+            {distinctionFilter !== "all" && (
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2 bg-blue-50/70 border border-blue-200 rounded-md text-xs text-blue-900">
+                <span>
+                  <strong>Active Matrix Filter:</strong>{" "}
+                  {distinctionFilter === "distinction"
+                    ? "Distinction (75 to 100 marks inclusive)"
+                    : "Below Distinction (< 75 marks)"}{" "}
+                  —{" "}
+                  {rowDimension === "subject" || colDimension === "grade"
+                    ? "applied to individual subject marks."
+                    : "applied to candidate Best-5 percentage."}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setDistinctionFilter("all")}
+                  className="text-xs font-semibold text-blue-700 hover:text-blue-900 underline"
+                >
+                  Show all marks
+                </button>
+              </div>
+            )}
 
             {/* Cross-Tabulation Matrix Table */}
             <div className="overflow-x-auto border border-slate-200 rounded-lg">

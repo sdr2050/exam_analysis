@@ -172,6 +172,8 @@ export type PivotMetric =
   | "passRate"
   | "qualityRate";
 
+export type PivotDistinctionFilter = "all" | "distinction" | "below_distinction";
+
 export interface PivotMatrixCell {
   value: number | null;
   formatted: string;
